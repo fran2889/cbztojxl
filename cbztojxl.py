@@ -10,15 +10,39 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
+# Archive format configurations
+ALL_FORMATS = {
+    'zip': {
+        'extensions': ['.cbz', '.zip'],
+        'extract_cmd': ['unzip', '-q', '{archive}', '-d', '{output}'],
+        'requires': ['unzip'],
+    },
+    'rar': {
+        'extensions': ['.cbr', '.rar'],
+        'extract_cmd': ['unrar', 'x', '-o+', '{archive}', '{output}'],
+        'requires': ['unrar'],
+    },
+    '7z': {
+        'extensions': ['.cb7', '.7z'],
+        'extract_cmd': ['7z', 'x', '{archive}', '-o{output}', '-y'],
+        'requires': ['7z'],
+    },
+}
+
+# Will be populated at runtime based on available tools
+ARCHIVE_FORMATS = {}
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Convert CBZ archives containing JPEG images to JXL format."
+        description="Convert comic archives (CBZ, ZIP, CBR, RAR, CB7, 7Z) "
+                    "containing JPEG images to JXL format in CBZ containers."
     )
     parser.add_argument(
         "input",
         type=Path,
-        help="CBZ file or directory containing CBZ files",
+        help="Comic archive file or directory containing comic archives "
+             "(supports: .cbz, .zip, .cbr, .rar, .cb7, .7z)",
     )
     parser.add_argument(
         "output_dir",
@@ -54,43 +78,125 @@ def parse_args():
     return parser.parse_args()
 
 
+def is_tool_available(tool_name: str) -> bool:
+    """Check if a command-line tool is available in PATH."""
+    try:
+        subprocess.run(
+            [tool_name, '--help'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        )
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
 def check_dependencies():
-    """Verify cjxl, zip, and unzip are available in PATH."""
-    required = ["cjxl", "zip", "unzip"]
-    missing = []
-    for cmd in required:
-        try:
-            subprocess.run(
-                [cmd, "--help"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=True,
-            )
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            missing.append(cmd)
-
-    if missing:
-        print(f"Error: Missing required dependencies: {', '.join(missing)}", file=sys.stderr)
+    """Verify required tools are available in PATH.
+    
+    Mandatory tools (cjxl, zip, unzip) cause script to exit if missing.
+    Optional tools (unrar, 7z) generate warnings, matching formats excluded from ARCHIVE_FORMATS.
+    """
+    global ARCHIVE_FORMATS
+    
+    MANDATORY_TOOLS = ['cjxl', 'zip', 'unzip']
+    OPTIONAL_TOOLS = {
+        'unrar': ['unrar', 'rar'],
+        '7z': ['7z'],
+    }
+    
+    # Check mandatory tools first
+    missing_mandatory = []
+    for cmd in MANDATORY_TOOLS:
+        if not is_tool_available(cmd):
+            missing_mandatory.append(cmd)
+    
+    if missing_mandatory:
+        print(f"Error: Missing required dependencies: {', '.join(missing_mandatory)}", file=sys.stderr)
         print("Install cjxl from libjxl: https://github.com/libjxl/libjxl", file=sys.stderr)
+        print("Install zip/unzip from your package manager", file=sys.stderr)
         sys.exit(1)
+    
+    # Check optional tools
+    available_optional = {}
+    for tool_name, variants in OPTIONAL_TOOLS.items():
+        available = any(is_tool_available(v) for v in variants)
+        available_optional[tool_name] = available
+    
+    # Print warnings for missing optional tools
+    if not available_optional.get('unrar'):
+        print("Warning: unrar not found, CBR/RAR files will be skipped", file=sys.stderr)
+    if not available_optional.get('7z'):
+        print("Warning: 7z not found, CB7/7Z files will be skipped", file=sys.stderr)
+    
+    # Build ARCHIVE_FORMATS from available tools
+    ARCHIVE_FORMATS = {k: v for k, v in ALL_FORMATS.items()
+                       if all(is_tool_available(t) for t in v['requires'])}
 
 
-def find_cbz_files(input_path: Path, recursive: bool) -> list[Path]:
-    """Find all .cbz files in input_path (file or directory)."""
+def find_archive_files(input_path: Path, recursive: bool) -> list[Path]:
+    """Find all supported archive files in input_path (file or directory)."""
     input_path = input_path.resolve()
-
-    # If input is a file with .cbz extension
-    if input_path.is_file() and input_path.suffix.lower() == ".cbz":
-        return [input_path]
-
-    # If input is a directory
+    
+    # Get all supported extensions from available formats
+    supported_extensions = []
+    for fmt in ARCHIVE_FORMATS.values():
+        supported_extensions.extend(fmt['extensions'])
+    
+    # If no formats available (shouldn't happen with mandatory zip), handle gracefully
+    if not supported_extensions:
+        print("Error: No archive formats available (zip/unzip required)", file=sys.stderr)
+        sys.exit(1)
+    
+    # Single file with supported extension
+    if input_path.is_file():
+        if input_path.suffix.lower() in supported_extensions:
+            return [input_path]
+        print(f"Error: {input_path} is not a valid archive file", file=sys.stderr)
+        print(f"Supported formats: {', '.join(sorted(set(supported_extensions)))}", file=sys.stderr)
+        sys.exit(1)
+    
+    # Directory - find all files with supported extensions
     if input_path.is_dir():
-        pattern = "**/*.cbz" if recursive else "*.cbz"
-        return list(input_path.glob(pattern))
-
+        pattern = "**/*" if recursive else "*"
+        all_files = list(input_path.glob(pattern))
+        return [f for f in all_files 
+                if f.is_file() and f.suffix.lower() in supported_extensions]
+    
     # Invalid input
-    print(f"Error: {input_path} is not a valid CBZ file or directory", file=sys.stderr)
+    print(f"Error: {input_path} is not a valid file or directory", file=sys.stderr)
     sys.exit(1)
+
+
+def get_format_config(file_path: Path) -> dict | None:
+    """Get format config for a file based on its extension.
+    
+    Returns None if extension not in available formats.
+    """
+    ext = file_path.suffix.lower()
+    for fmt_name, fmt_config in ARCHIVE_FORMATS.items():
+        if ext in fmt_config['extensions']:
+            return fmt_config
+    return None
+
+
+def extract_archive(archive_path: Path, output_dir: Path, fmt_config: dict):
+    """Extract archive using format-specific command."""
+    # Build command by formatting placeholders
+    cmd = [c.format(archive=str(archive_path), output=str(output_dir)) 
+           for c in fmt_config['extract_cmd']]
+    try:
+        subprocess.run(
+            cmd,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"Error: Failed to extract {archive_path}", file=sys.stderr)
+        print(f"  Command returned: {e.returncode}", file=sys.stderr)
+        sys.exit(1)
 
 
 @contextmanager
@@ -197,43 +303,37 @@ def compute_output_path(
     output_dir: Path | None,
     overwrite: bool,
 ) -> Path:
-    """Compute the output path for a converted CBZ file.
-
-    Args:
-        input_path: The specific CBZ file being processed
-        base_input: The original INPUT argument (file or directory)
-        output_dir: Optional output directory
-        overwrite: Whether to overwrite existing files
+    """Compute the output path for a converted archive file.
+    
+    Always uses .cbz extension for output, regardless of input format.
     """
     input_path = input_path.resolve()
     base_input = base_input.resolve()
-
+    
     if output_dir is None:
-        # Default: add _jxl suffix next to source
-        return input_path.with_stem(input_path.stem + "_jxl")
-
+        # Default: add _jxl suffix next to source, with .cbz extension
+        return input_path.with_stem(input_path.stem + "_jxl").with_suffix('.cbz')
+    
     output_dir = output_dir.resolve()
-
-    # In-place replacement: output_dir equals the directory containing input_path
-    # AND overwrite is enabled
+    
+    # In-place replacement: output_dir equals source directory AND overwrite
     if output_dir == input_path.parent and overwrite:
-        return input_path
-
+        return input_path.with_suffix('.cbz')
+    
     # Mirror structure: compute relative path from base_input to input_path
     try:
         rel_path = input_path.relative_to(base_input)
-        # If rel_path is just '.', it means input_path == base_input
-        # For a file, use just the filename
         if rel_path == Path("."):
             rel_path = Path(input_path.name)
     except ValueError:
-        # input_path is not under base_input, use just filename
         rel_path = Path(input_path.name)
+    
+    result = output_dir / rel_path
+    # Force .cbz extension
+    return result.with_suffix('.cbz')
 
-    return output_dir / rel_path
 
-
-def process_cbz(
+def process_archive(
     input_path: Path,
     base_input: Path,
     output_dir: Path | None,
@@ -244,9 +344,15 @@ def process_cbz(
     total_files: int = None,
     show_progress_bar: bool = False,
 ) -> bool:
-    """Process a single CBZ file: extract, convert, repackage."""
+    """Process a single archive file: extract, convert JPEGs to JXL, repack as CBZ."""
     input_path = input_path.resolve()
-
+    
+    # Get format config - skip silently if not available
+    fmt_config = get_format_config(input_path)
+    if fmt_config is None:
+        # Extension not in available formats (tool missing) - skip silently
+        return True  # Not a failure, just skip
+    
     if verbose:
         print(f"Processing: {input_path}")
 
@@ -279,10 +385,10 @@ def process_cbz(
 
     # Create temp directory in same filesystem as input
     with temp_dir(input_path) as temp_path:
-        # Extract CBZ
+        # Extract archive
         if verbose:
             print(f"  Extracting to: {temp_path}")
-        extract_cbz(input_path, temp_path)
+        extract_archive(input_path, temp_path, fmt_config)
         
         # Count images for progress tracking
         jpeg_files = [f for f in temp_path.iterdir() 
@@ -336,15 +442,15 @@ def main():
     input_path = args.input.resolve()
     output_dir = args.output_dir.resolve() if args.output_dir else None
 
-    # Find all CBZ files to process
-    cbz_files = find_cbz_files(input_path, args.recursive)
+    # Find all archive files to process
+    archive_files = find_archive_files(input_path, args.recursive)
 
-    if not cbz_files:
-        print("No CBZ files found to process.", file=sys.stderr)
+    if not archive_files:
+        print("No archive files found to process.", file=sys.stderr)
         sys.exit(1)
 
     if args.verbose:
-        print(f"Found {len(cbz_files)} CBZ file(s) to process")
+        print(f"Found {len(archive_files)} archive file(s) to process")
 
     failures = []
     
@@ -353,26 +459,26 @@ def main():
     show_progress_bar = not args.verbose and not args.dry_run
     show_summary = not args.verbose  # Show summary in normal and dry run, but not verbose
     
-    for i, cbz_file in enumerate(cbz_files, 1):
+    for i, archive_file in enumerate(archive_files, 1):
         try:
-            success = process_cbz(
-                input_path=cbz_file,
+            success = process_archive(
+                input_path=archive_file,
                 base_input=input_path,
                 output_dir=output_dir,
                 overwrite=args.overwrite,
                 verbose=args.verbose,
                 dry_run=args.dry_run,
                 file_index=i if show_summary else None,
-                total_files=len(cbz_files) if show_summary else None,
+                total_files=len(archive_files) if show_summary else None,
                 show_progress_bar=show_progress_bar,
             )
             if not success:
-                failures.append(cbz_file)
+                failures.append(archive_file)
         except SystemExit as e:
-            # process_cbz may call sys.exit on some errors
+            # process_archive may call sys.exit on some errors
             # In directory mode, we want to continue
             if e.code != 0:
-                failures.append(cbz_file)
+                failures.append(archive_file)
             continue
 
     # Report results
@@ -383,7 +489,7 @@ def main():
         sys.exit(2)
 
     if args.verbose:
-        print(f"\nSuccessfully processed {len(cbz_files)} file(s)")
+        print(f"\nSuccessfully processed {len(archive_files)} file(s)")
 
     sys.exit(0)
 

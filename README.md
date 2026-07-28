@@ -1,6 +1,6 @@
 # cbztojxl
 
-Convert CBZ archives containing JPEG images to JXL format using lossless compression.
+Convert comic archive files (CBZ, CBR, CB7, ZIP, RAR, 7Z) containing JPEG images to JXL format using lossless compression.
 
 ## Installation
 
@@ -8,10 +8,16 @@ Requires:
 - Python 3.6+
 - [cjxl from libjxl](https://github.com/libjxl/libjxl)
 - zip and unzip utilities (usually pre-installed on Linux/macOS)
+- Optional: unrar/rar (for CBR/RAR support)
+- Optional: p7zip/7z (for CB7/7Z support)
 
 ```bash
 # On Ubuntu/Debian
 sudo apt-get install zip unzip
+# For RAR support:
+sudo apt-get install unrar
+# For 7z support:
+sudo apt-get install p7zip-full
 # Then install libjxl (follow instructions at https://github.com/libjxl/libjxl)
 ```
 
@@ -26,6 +32,10 @@ python cbztojxl.py /path/to/comics/
 
 # Directory recursive - process all .cbz files recursively
 python cbztojxl.py /path/to/comics/ -r
+
+# Mixed format directory (CBZ, ZIP, CBR, RAR, CB7, 7Z)
+python cbztojxl.py /path/to/comics/ -r
+# Output is always .cbz (ZIP-based) with JXL images
 
 # Output to different directory - mirror structure, no suffix
 python cbztojxl.py /path/to/comics/ /backup/ -r
@@ -63,3 +73,16 @@ python cbztojxl.py /comics/ /backup/ -r --dry-run
 | 0 | Success |
 | 1 | CLI or dependency error |
 | 2 | One or more conversion failures |
+
+## Supported Formats
+
+| Input Extension | Archive Type | Output Format | Tool Required |
+|----------------|--------------|---------------|----------------|
+| .cbz | ZIP | .cbz (ZIP) | zip/unzip (mandatory) |
+| .zip | ZIP | .cbz (ZIP) | zip/unzip (mandatory) |
+| .cbr | RAR | .cbz (ZIP) | unrar (optional) |
+| .rar | RAR | .cbz (ZIP) | unrar (optional) |
+| .cb7 | 7z | .cbz (ZIP) | 7z (optional) |
+| .7z | 7z | .cbz (ZIP) | 7z (optional) |
+
+**Note:** If optional tools (unrar, 7z) are not installed, matching files will be silently skipped.
