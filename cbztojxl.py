@@ -122,36 +122,43 @@ def extract_cbz(cbz_path: Path, output_dir: Path):
         sys.exit(1)
 
 
-def convert_jpegs_to_jxl(temp_dir: Path):
+def convert_jpegs_to_jxl(temp_dir: Path, on_progress=None):
     """Convert all .jpg/.jpeg files in temp_dir to .jxl, delete originals."""
     failures = []
+    
+    # Find all JPEG files first to get total
+    jpeg_files = [f for f in temp_dir.iterdir() 
+                  if f.suffix.lower() in (".jpg", ".jpeg")]
+    
+    for i, filepath in enumerate(jpeg_files):
+        jxl_path = filepath.with_suffix(".jxl")
 
-    for filepath in temp_dir.iterdir():
-        if filepath.suffix.lower() in (".jpg", ".jpeg"):
-            jxl_path = filepath.with_suffix(".jxl")
-
+        try:
+            # Try -q 100 first (mathematically lossless for cjxl v0.11+)
+            # If that fails, try --lossless (older versions)
             try:
-                # Try -q 100 first (mathematically lossless for cjxl v0.11+)
-                # If that fails, try --lossless (older versions)
-                try:
-                    subprocess.run(
-                        ["cjxl", "-q", "100", str(filepath), str(jxl_path)],
-                        check=True,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.PIPE,
-                    )
-                except subprocess.CalledProcessError:
-                    # Try --lossless for older versions
-                    subprocess.run(
-                        ["cjxl", "--lossless", str(filepath), str(jxl_path)],
-                        check=True,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.PIPE,
-                    )
-                # Delete original on success
-                filepath.unlink()
-            except subprocess.CalledProcessError as e:
-                failures.append((filepath, e))
+                subprocess.run(
+                    ["cjxl", "-q", "100", str(filepath), str(jxl_path)],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                )
+            except subprocess.CalledProcessError:
+                # Try --lossless for older versions
+                subprocess.run(
+                    ["cjxl", "--lossless", str(filepath), str(jxl_path)],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                )
+            # Delete original on success
+            filepath.unlink()
+            
+            # Call progress callback after successful conversion
+            if on_progress:
+                on_progress(i + 1)
+        except subprocess.CalledProcessError as e:
+            failures.append((filepath, e))
 
     if failures:
         for filepath, error in failures:
@@ -233,6 +240,9 @@ def process_cbz(
     overwrite: bool,
     verbose: bool,
     dry_run: bool,
+    file_index: int = None,
+    total_files: int = None,
+    show_progress_bar: bool = False,
 ) -> bool:
     """Process a single CBZ file: extract, convert, repackage."""
     input_path = input_path.resolve()
@@ -240,13 +250,26 @@ def process_cbz(
     if verbose:
         print(f"Processing: {input_path}")
 
-    if dry_run:
-        output_path = compute_output_path(input_path, base_input, output_dir, overwrite)
-        print(f"  Would create: {output_path}")
-        return True
-
-    # Compute output path
+    # Compute output path early for dry run
     output_path = compute_output_path(input_path, base_input, output_dir, overwrite)
+    
+    if dry_run:
+        print(f"  Would create: {output_path}")
+        # Print summary for dry run if file indexing is provided
+        if file_index is not None and total_files is not None:
+            # For dry run, we need to count images to show in summary
+            # Count images without extracting (using unzip -l)
+            try:
+                result = subprocess.run(
+                    ["unzip", "-l", str(input_path)],
+                    capture_output=True, text=True, check=True
+                )
+                image_count = sum(1 for line in result.stdout.splitlines()
+                                  if line.lower().endswith(".jpg") or line.lower().endswith(".jpeg"))
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                image_count = 0
+            print(f"Processing: {input_path.name} - Done! ({image_count} images)")
+        return True
 
     # Check if output exists and overwrite is False
     if output_path.exists() and not overwrite:
@@ -260,11 +283,24 @@ def process_cbz(
         if verbose:
             print(f"  Extracting to: {temp_path}")
         extract_cbz(input_path, temp_path)
-
+        
+        # Count images for progress tracking
+        jpeg_files = [f for f in temp_path.iterdir() 
+                      if f.suffix.lower() in (".jpg", ".jpeg")]
+        jpeg_count = len(jpeg_files)
+        
+        # Set up progress callback if progress bar should be shown
+        if show_progress_bar and file_index is not None and total_files is not None:
+            progress_cb = create_progress_callback(
+                input_path.name, file_index, total_files, jpeg_count
+            )
+        else:
+            progress_cb = None
+        
         # Convert JPEGs to JXL
         if verbose:
             print(f"  Converting JPEGs to JXL")
-        convert_jpegs_to_jxl(temp_path)
+        convert_jpegs_to_jxl(temp_path, on_progress=progress_cb)
 
         # Create output CBZ
         if verbose:
@@ -272,8 +308,25 @@ def process_cbz(
         create_cbz(output_path, temp_path)
 
         # Temp dir auto-cleaned by context manager
-
+    
+    # Print summary when done (when file indexing is provided)
+    if file_index is not None and total_files is not None:
+        print()  # Newline after progress line
+        print(f"Processing: {input_path.name} - Done! ({jpeg_count} images)")
+    
     return True
+
+
+def create_progress_callback(file_name: str, file_index: int, total_files: int, total_images: int):
+    """Returns a callback that updates progress display."""
+    def callback(current_image: int):
+        if total_images <= 0:
+            filled = 0
+        else:
+            filled = int(20 * current_image / total_images)
+        bar = '=' * filled + ' ' * (20 - filled)
+        print(f"\rProcessing: {file_name} [{file_index}/{total_files}] |{bar}| {current_image}/{total_images}", end="")
+    return callback
 
 
 def main():
@@ -294,8 +347,13 @@ def main():
         print(f"Found {len(cbz_files)} CBZ file(s) to process")
 
     failures = []
-
-    for cbz_file in cbz_files:
+    
+    # Show progress bar only in normal mode (no verbose, no dry run)
+    # But show summary line in normal and dry run modes
+    show_progress_bar = not args.verbose and not args.dry_run
+    show_summary = not args.verbose  # Show summary in normal and dry run, but not verbose
+    
+    for i, cbz_file in enumerate(cbz_files, 1):
         try:
             success = process_cbz(
                 input_path=cbz_file,
@@ -304,6 +362,9 @@ def main():
                 overwrite=args.overwrite,
                 verbose=args.verbose,
                 dry_run=args.dry_run,
+                file_index=i if show_summary else None,
+                total_files=len(cbz_files) if show_summary else None,
+                show_progress_bar=show_progress_bar,
             )
             if not success:
                 failures.append(cbz_file)
