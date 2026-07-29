@@ -423,11 +423,11 @@ def process_archive(
     file_index: int = None,
     total_files: int = None,
     show_progress_bar: bool = False,
-) -> tuple[bool, int, int, str]:
+) -> tuple[int, int, str]:
     """Process a single archive file: extract, convert JPEGs to JXL, repack as CBZ.
     
     Returns:
-        tuple: (success, input_size, output_size, status_message)
+        tuple: (input_size, output_size, status_message)
         where status_message can be 'processed', 'skipped_no_jpeg', 'skipped_exists', 'skipped_format'
     """
     input_path = input_path.resolve()
@@ -441,7 +441,7 @@ def process_archive(
         if file_index is not None and total_files is not None:
             size_info = f"{format_file_size(input_size)}"
             print(f"Processing: {input_path.name} - Skipped (unsupported format, {size_info})")
-        return True, input_size, 0, "skipped_format"
+        return input_size, 0, "skipped_format"
     
     if verbose:
         print(f"Processing: {input_path}")
@@ -454,7 +454,7 @@ def process_archive(
         if file_index is not None and total_files is not None:
             size_info = f"{format_file_size(input_size)}"
             print(f"Processing: {input_path.name} - Skipped (no JPEG files, {size_info})")
-        return True, input_size, 0, "skipped_no_jpeg"
+        return input_size, 0, "skipped_no_jpeg"
 
     # Compute output path early for dry run
     output_path = compute_output_path(input_path, base_input, output_dir, overwrite)
@@ -470,7 +470,7 @@ def process_archive(
             reduction_pct = 0.0
             size_info = f"{format_file_size(input_size)} -> {format_file_size(estimated_output_size)} ({reduction_pct:.1f}%)"
             print(f"Processing: {input_path.name} - Done! ({image_count} images, {size_info})")
-        return True, input_size, input_size, "processed"
+        return input_size, input_size, "processed"
 
     # Check if output exists and overwrite is False
     if output_path.exists() and not overwrite:
@@ -484,7 +484,7 @@ def process_archive(
             reduction_pct = ((input_size - existing_output_size) / input_size * 100) if input_size > 0 else 0.0
             size_info = f"{format_file_size(input_size)} -> {format_file_size(existing_output_size)} ({reduction_pct:.1f}%)"
             print(f"Processing: {input_path.name} - Skipped (output exists, {size_info})")
-        return True, input_size, existing_output_size, "skipped_exists"
+        return input_size, existing_output_size, "skipped_exists"
 
     # Track max line length for progress bar clearing
     max_line_len = 0
@@ -540,7 +540,7 @@ def process_archive(
 
         # Temp dir auto-cleaned by context manager
     
-    return True, input_size, output_size, "processed"
+    return input_size, output_size, "processed"
 
 
 def create_progress_callback(file_name: str, file_index: int, total_files: int, total_images: int):
@@ -592,7 +592,7 @@ def main():
     
     for i, archive_file in enumerate(archive_files, 1):
         try:
-            success, input_size, output_size, status = process_archive(
+            input_size, output_size, status = process_archive(
                 input_path=archive_file,
                 base_input=input_path,
                 output_dir=output_dir,
@@ -603,18 +603,17 @@ def main():
                 total_files=len(archive_files) if show_summary else None,
                 show_progress_bar=show_progress_bar,
             )
-            if not success:
-                failures.append(archive_file)
-            else:
-                # Accumulate sizes for total summary
-                if status == "processed" or status == "skipped_exists":
-                    total_input_size += input_size
-                    total_output_size += output_size
-                    processed_count += 1
-                elif status == "skipped_no_jpeg" or status == "skipped_format":
-                    # For skipped files (no JPEG or format not available), 
-                    # don't include in total calculation as no processing occurred
-                    processed_count += 1
+            # process_archive() uses sys.exit() for failures, caught below
+            # All return paths indicate some form of success (including skips)
+            # Accumulate sizes for total summary
+            if status == "processed" or status == "skipped_exists":
+                total_input_size += input_size
+                total_output_size += output_size
+                processed_count += 1
+            elif status == "skipped_no_jpeg" or status == "skipped_format":
+                # For skipped files (no JPEG or format not available), 
+                # don't include in total calculation as no processing occurred
+                processed_count += 1
         except SystemExit as e:
             # process_archive may call sys.exit on some errors
             # In directory mode, we want to continue
