@@ -26,7 +26,7 @@ ALL_FORMATS = {
     },
     '7z': {
         'extensions': ['.cb7', '.7z'],
-        'extract_cmd': ['7z', 'x', '{archive}', '-o{output}', '-y'],
+        'extract_cmd': ['7z', 'x', '{archive}', '-o', '{output}', '-y'],
         'list_cmd': ['7z', 'l', '{archive}'],
         'requires': ['7z'],
     },
