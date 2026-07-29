@@ -208,6 +208,12 @@ def is_jpeg_file(path: Path) -> bool:
     return path.suffix.lower() in (".jpg", ".jpeg") and not is_appledouble_path(str(path))
 
 
+def format_size_reduction(input_size: int, output_size: int) -> str:
+    """Format input and output sizes with reduction percentage."""
+    reduction_pct = ((input_size - output_size) / input_size * 100) if input_size > 0 else 0.0
+    return f"{format_file_size(input_size)} -> {format_file_size(output_size)} ({reduction_pct:.1f}%)"
+
+
 def is_appledouble_path(path: str) -> bool:
     """Check if a file path is an AppleDouble metadata file.
     
@@ -470,8 +476,7 @@ def process_archive(
         if file_index is not None and total_files is not None:
             # For dry run, estimate output size as roughly same as input (we can't know actual size)
             estimated_output_size = input_size  # This is an estimate for dry run
-            reduction_pct = 0.0
-            size_info = f"{format_file_size(input_size)} -> {format_file_size(estimated_output_size)} ({reduction_pct:.1f}%)"
+            size_info = format_size_reduction(input_size, estimated_output_size)
             print(f"Processing: {input_path.name} - Done! ({image_count} images, {size_info})")
         return input_size, input_size, "processed"
 
@@ -483,9 +488,7 @@ def process_archive(
         existing_output_size = output_path.stat().st_size
         # Print summary line for non-verbose mode
         if file_index is not None and total_files is not None:
-            # Calculate reduction percentage
-            reduction_pct = ((input_size - existing_output_size) / input_size * 100) if input_size > 0 else 0.0
-            size_info = f"{format_file_size(input_size)} -> {format_file_size(existing_output_size)} ({reduction_pct:.1f}%)"
+            size_info = format_size_reduction(input_size, existing_output_size)
             print(f"Processing: {input_path.name} - Skipped (output exists, {size_info})")
         return input_size, existing_output_size, "skipped_exists"
 
@@ -543,9 +546,7 @@ def process_archive(
         
         # Print summary when done (when file indexing is provided)
         if file_index is not None and total_files is not None and not verbose:
-            # Calculate reduction percentage
-            reduction_pct = ((input_size - output_size) / input_size * 100) if input_size > 0 else 0.0
-            size_info = f"{format_file_size(input_size)} -> {format_file_size(output_size)} ({reduction_pct:.1f}%)"
+            size_info = format_size_reduction(input_size, output_size)
             # Replace progress bar with Done message using carriage return
             # Pad to max line length to clear any remaining characters
             done_msg = f"Processing: {input_path.name} - Done! ({jpeg_count} images, {size_info})"
@@ -634,9 +635,7 @@ def main() -> None:
 
     # Print total summary after all files are processed
     if show_summary and total_input_size > 0:
-        # Calculate total reduction percentage
-        total_reduction_pct = ((total_input_size - total_output_size) / total_input_size * 100) if total_input_size > 0 else 0.0
-        total_size_info = f"{format_file_size(total_input_size)} -> {format_file_size(total_output_size)} ({total_reduction_pct:.1f}%)"
+        total_size_info = format_size_reduction(total_input_size, total_output_size)
         print(f"\nTotal: {total_size_info}")
 
     # Report results
