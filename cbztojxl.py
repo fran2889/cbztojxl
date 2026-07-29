@@ -203,6 +203,11 @@ def get_format_config(file_path: Path) -> dict | None:
     return None
 
 
+def is_jpeg_file(path: Path) -> bool:
+    """Check if a file path is a JPEG image file."""
+    return path.suffix.lower() in (".jpg", ".jpeg") and not is_appledouble_path(str(path))
+
+
 def is_appledouble_path(path: str) -> bool:
     """Check if a file path is an AppleDouble metadata file.
     
@@ -311,9 +316,7 @@ def convert_jpegs_to_jxl(temp_dir: Path, on_progress=None, verbose: bool = False
     
     # Find all JPEG files recursively, excluding AppleDouble metadata files
     jpeg_files = [f for f in temp_dir.rglob("*") 
-                  if f.is_file() 
-                  and f.suffix.lower() in (".jpg", ".jpeg")
-                  and not is_appledouble_path(str(f))]
+                  if f.is_file() and is_jpeg_file(f)]
     
     for i, filepath in enumerate(jpeg_files):
         jxl_path = filepath.with_suffix(".jxl")
@@ -504,9 +507,7 @@ def process_archive(
         
         # Count images for progress tracking (recursively)
         jpeg_files = [f for f in temp_path.rglob("*") 
-                      if f.is_file() 
-                      and f.suffix.lower() in (".jpg", ".jpeg")
-                      and not is_appledouble_path(str(f))]
+                      if f.is_file() and is_jpeg_file(f)]
         jpeg_count = len(jpeg_files)
         
         # Set up progress callback if progress bar should be shown
