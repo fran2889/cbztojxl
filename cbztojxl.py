@@ -9,7 +9,7 @@ import sys
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Callable, Iterator, TypedDict
 
 # Exit code constants
 EXIT_DEPENDENCY_ERROR = 1
@@ -26,8 +26,17 @@ class DependencyError(Exception):
     """Raised when required dependencies are missing."""
     pass
 
+
+class ArchiveFormatConfig(TypedDict):
+    """Type definition for archive format configuration."""
+    extensions: list[str]
+    extract_cmd: list[str]
+    list_cmd: list[str]
+    requires: list[str]
+
+
 # Archive format configurations
-ALL_FORMATS = {
+ALL_FORMATS: dict[str, ArchiveFormatConfig] = {
     'zip': {
         'extensions': ['.cbz', '.zip'],
         'extract_cmd': ['unzip', '-q', '{archive}', '-d', '{output}'],
@@ -49,7 +58,7 @@ ALL_FORMATS = {
 }
 
 # Will be populated at runtime based on available tools
-ARCHIVE_FORMATS = {}
+ARCHIVE_FORMATS: dict[str, ArchiveFormatConfig] = {}
 
 
 def parse_args() -> argparse.Namespace:
@@ -191,7 +200,7 @@ def find_archive_files(input_path: Path, recursive: bool) -> list[Path]:
     sys.exit(EXIT_DEPENDENCY_ERROR)
 
 
-def get_format_config(file_path: Path) -> dict | None:
+def get_format_config(file_path: Path) -> ArchiveFormatConfig | None:
     """Get format config for a file based on its extension.
     
     Returns None if extension not in available formats.
@@ -253,7 +262,7 @@ def format_file_size(size_bytes: int) -> str:
         return f"{size:.1f} {units[unit_index]}"
 
 
-def count_jpegs_in_archive(archive_path: Path, fmt_config: dict) -> int:
+def count_jpegs_in_archive(archive_path: Path, fmt_config: ArchiveFormatConfig) -> int:
     """Count JPEG files in archive using list command.
     
     Returns the count of .jpg/.jpeg files, or 0 on error.
@@ -278,7 +287,7 @@ def count_jpegs_in_archive(archive_path: Path, fmt_config: dict) -> int:
 
 
 
-def extract_archive(archive_path: Path, output_dir: Path, fmt_config: dict) -> None:
+def extract_archive(archive_path: Path, output_dir: Path, fmt_config: ArchiveFormatConfig) -> None:
     """Extract archive using format-specific command.
     
     Raises:
