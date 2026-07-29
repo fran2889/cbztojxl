@@ -326,7 +326,7 @@ def print_archive_report(
     avg_quality = sum(valid_qualities) / len(valid_qualities) if valid_qualities else 0
     
     is_unreadable = corrupted_count > 0
-    is_low_quality = avg_quality < threshold
+    is_low_quality = avg_quality < threshold and valid_qualities
     
     if is_unreadable and is_low_quality:
         status = "UNREADABLE + LOW QUALITY"
