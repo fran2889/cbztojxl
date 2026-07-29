@@ -229,12 +229,12 @@ def extract_cbz(cbz_path: Path, output_dir: Path):
 
 
 def convert_jpegs_to_jxl(temp_dir: Path, on_progress=None):
-    """Convert all .jpg/.jpeg files in temp_dir to .jxl, delete originals."""
+    """Convert all .jpg/.jpeg files in temp_dir to .jxl, delete originals (recursively)."""
     failures = []
     
-    # Find all JPEG files first to get total
-    jpeg_files = [f for f in temp_dir.iterdir() 
-                  if f.suffix.lower() in (".jpg", ".jpeg")]
+    # Find all JPEG files recursively
+    jpeg_files = [f for f in temp_dir.rglob("*") 
+                  if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg")]
     
     for i, filepath in enumerate(jpeg_files):
         jxl_path = filepath.with_suffix(".jxl")
@@ -390,9 +390,9 @@ def process_archive(
             print(f"  Extracting to: {temp_path}")
         extract_archive(input_path, temp_path, fmt_config)
         
-        # Count images for progress tracking
-        jpeg_files = [f for f in temp_path.iterdir() 
-                      if f.suffix.lower() in (".jpg", ".jpeg")]
+        # Count images for progress tracking (recursively)
+        jpeg_files = [f for f in temp_path.rglob("*") 
+                      if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg")]
         jpeg_count = len(jpeg_files)
         
         # Set up progress callback if progress bar should be shown
