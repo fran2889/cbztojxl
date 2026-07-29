@@ -132,6 +132,9 @@ def check_dependencies():
         print("Warning: unrar not found, CBR/RAR files will be skipped", file=sys.stderr)
     if not available_optional.get('7z'):
         print("Warning: 7z not found, CB7/7Z files will be skipped", file=sys.stderr)
+    # Empty line after tool warnings
+    if not available_optional.get('unrar') or not available_optional.get('7z'):
+        print(file=sys.stderr)
     
     # Build ARCHIVE_FORMATS from available tools
     ARCHIVE_FORMATS = {k: v for k, v in ALL_FORMATS.items()
@@ -452,6 +455,9 @@ def process_archive(
             print(f"  Skipping {input_path}: {output_path} already exists")
         return True
 
+    # Track max line length for progress bar clearing
+    max_line_len = 0
+    
     # Create temp directory in same filesystem as input
     with temp_dir(input_path) as temp_path:
         # Extract archive
@@ -468,7 +474,7 @@ def process_archive(
         
         # Set up progress callback if progress bar should be shown
         if show_progress_bar and file_index is not None and total_files is not None:
-            progress_cb = create_progress_callback(
+            progress_cb, max_line_len = create_progress_callback(
                 input_path.name, file_index, total_files, jpeg_count
             )
         else:
@@ -484,26 +490,38 @@ def process_archive(
             print(f"  Creating: {output_path}")
         create_cbz(output_path, temp_path)
 
+        # Print summary when done (when file indexing is provided)
+        if file_index is not None and total_files is not None and not verbose:
+            # Replace progress bar with Done message using carriage return
+            # Pad to max line length to clear any remaining characters
+            done_msg = f"Processing: {input_path.name} - Done! ({jpeg_count} images)"
+            if max_line_len > 0:
+                padded_msg = done_msg.ljust(max_line_len)
+                print(f"\r{padded_msg}")
+            else:
+                print(done_msg)
+
         # Temp dir auto-cleaned by context manager
-    
-    # Print summary when done (when file indexing is provided)
-    if file_index is not None and total_files is not None:
-        print()  # Newline after progress line
-        print(f"Processing: {input_path.name} - Done! ({jpeg_count} images)")
     
     return True
 
 
 def create_progress_callback(file_name: str, file_index: int, total_files: int, total_images: int):
-    """Returns a callback that updates progress display."""
+    """Returns a tuple of (callback, max_line_length) for progress display."""
+    # Store the maximum line length for clearing later
+    max_line_len = len(f"Processing: {file_name} [{file_index}/{total_files}] |{'=' * 20}| {total_images}/{total_images}")
+    
     def callback(current_image: int):
         if total_images <= 0:
             filled = 0
         else:
             filled = int(20 * current_image / total_images)
         bar = '=' * filled + ' ' * (20 - filled)
-        print(f"\rProcessing: {file_name} [{file_index}/{total_files}] |{bar}| {current_image}/{total_images}", end="")
-    return callback
+        line = f"Processing: {file_name} [{file_index}/{total_files}] |{bar}| {current_image}/{total_images}"
+        # Pad to max length and use carriage return
+        padded_line = line.ljust(max_line_len)
+        print(f"\r{padded_line}", end="")
+    return callback, max_line_len
 
 
 def main():
