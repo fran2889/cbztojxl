@@ -19,6 +19,9 @@ EXIT_NO_FILES = 3
 # UI constants
 PROGRESS_BAR_WIDTH = 20
 
+# Conversion constants
+CJXL_QUALITY = 100
+
 
 class ConversionError(Exception):
     """Raised when archive processing fails."""
@@ -347,9 +350,9 @@ def convert_jpegs_to_jxl(temp_dir: Path, on_progress=None, verbose: bool = False
             print(f"  Converting image {i+1}/{len(jpeg_files)}: {filepath.name}")
 
         try:
-            # Use -q 100 (mathematically lossless for cjxl v0.11+)
+            # Use -q CJXL_QUALITY (mathematically lossless for cjxl v0.11+)
             subprocess.run(
-                ["cjxl", "-q", "100", str(filepath), str(jxl_path)],
+                ["cjxl", "-q", str(CJXL_QUALITY), str(filepath), str(jxl_path)],
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
