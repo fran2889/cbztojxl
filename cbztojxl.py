@@ -213,12 +213,13 @@ def is_appledouble_path(path: str) -> bool:
     
     AppleDouble files start with '._' or are inside '__MACOSX' directories.
     """
+    # Use os.path for cross-platform path handling
     path_lower = path.lower()
     # Check for __MACOSX in any path component
-    if '__macosx' in path_lower.split('/'):
+    if any(part == '__macosx' for part in path_lower.split(os.sep)):
         return True
     # Check for ._ prefix in the filename
-    basename = path_lower.rsplit('/', 1)[-1]
+    basename = os.path.basename(path_lower)
     if basename.startswith('._'):
         return True
     return False
