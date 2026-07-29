@@ -504,9 +504,6 @@ def process_archive(
     # Track max line length for progress bar clearing
     max_line_len = 0
     
-    # Track max line length for progress bar clearing
-    max_line_len = 0
-    
     # Create temp directory in same filesystem as input
     with temp_dir(input_path) as temp_path:
         try:
