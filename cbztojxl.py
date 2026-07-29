@@ -370,6 +370,10 @@ def create_cbz(output_path: Path, source_dir: Path) -> None:
 
     # Ensure parent directory exists
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Check if output directory is writable
+    if not os.access(output_path.parent, os.W_OK):
+        raise DependencyError(f"Output directory is not writable: {output_path.parent}")
 
     # Remove existing file to avoid zip updating it instead of replacing
     if output_path.exists():
