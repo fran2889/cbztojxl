@@ -9,6 +9,12 @@ import sys
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Callable
+
+# Exit code constants
+EXIT_DEPENDENCY_ERROR = 1
+EXIT_CONVERSION_ERROR = 2
+EXIT_NO_FILES = 1
 
 # Archive format configurations
 ALL_FORMATS = {
@@ -119,7 +125,7 @@ def check_dependencies():
         print(f"Error: Missing required dependencies: {', '.join(missing_mandatory)}", file=sys.stderr)
         print("Install cjxl from libjxl: https://github.com/libjxl/libjxl", file=sys.stderr)
         print("Install zip/unzip from your package manager", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_DEPENDENCY_ERROR)
     
     # Check optional tools
     available_optional = {}
@@ -153,7 +159,7 @@ def find_archive_files(input_path: Path, recursive: bool) -> list[Path]:
     # If no formats available (shouldn't happen with mandatory zip), handle gracefully
     if not supported_extensions:
         print("Error: No archive formats available (zip/unzip required)", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_DEPENDENCY_ERROR)
     
     # Single file with supported extension
     if input_path.is_file():
@@ -161,7 +167,7 @@ def find_archive_files(input_path: Path, recursive: bool) -> list[Path]:
             return [input_path]
         print(f"Error: {input_path} is not a valid archive file", file=sys.stderr)
         print(f"Supported formats: {', '.join(sorted(set(supported_extensions)))}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_DEPENDENCY_ERROR)
     
     # Directory - find all files with supported extensions
     if input_path.is_dir():
@@ -172,7 +178,7 @@ def find_archive_files(input_path: Path, recursive: bool) -> list[Path]:
     
     # Invalid input
     print(f"Error: {input_path} is not a valid file or directory", file=sys.stderr)
-    sys.exit(1)
+    sys.exit(EXIT_DEPENDENCY_ERROR)
 
 
 def get_format_config(file_path: Path) -> dict | None:
@@ -249,29 +255,6 @@ def count_jpegs_in_archive(archive_path: Path, fmt_config: dict) -> int:
         return 0
 
 
-def archive_contains_jpegs(archive_path: Path, fmt_config: dict) -> bool:
-    """Check if archive contains any JPEG files using list command.
-    
-    Returns True if JPEG files (.jpg, .jpeg) are found, False otherwise.
-    If listing fails, returns True to be safe (don't skip).
-    """
-    cmd = [c.format(archive=str(archive_path)) for c in fmt_config['list_cmd']]
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        for line in result.stdout.splitlines():
-            lower_line = line.lower()
-            if (lower_line.endswith('.jpg') or lower_line.endswith('.jpeg')) \
-               and not is_appledouble_path(lower_line):
-                return True
-        return False
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return True
-
 
 def extract_archive(archive_path: Path, output_dir: Path, fmt_config: dict):
     """Extract archive using format-specific command."""
@@ -288,7 +271,7 @@ def extract_archive(archive_path: Path, output_dir: Path, fmt_config: dict):
     except subprocess.CalledProcessError as e:
         print(f"Error: Failed to extract {archive_path}", file=sys.stderr)
         print(f"  Command returned: {e.returncode}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_DEPENDENCY_ERROR)
 
 
 @contextmanager
@@ -306,7 +289,7 @@ def temp_dir(source_path: Path):
 
 
 
-def convert_jpegs_to_jxl(temp_dir: Path, on_progress=None):
+def convert_jpegs_to_jxl(temp_dir: Path, on_progress=None, verbose: bool = False):
     """Convert all .jpg/.jpeg files in temp_dir to .jxl, delete originals (recursively)."""
     failures = []
     
@@ -319,24 +302,17 @@ def convert_jpegs_to_jxl(temp_dir: Path, on_progress=None):
     for i, filepath in enumerate(jpeg_files):
         jxl_path = filepath.with_suffix(".jxl")
 
+        if verbose:
+            print(f"  Converting image {i+1}/{len(jpeg_files)}: {filepath.name}")
+
         try:
-            # Try -q 100 first (mathematically lossless for cjxl v0.11+)
-            # If that fails, try --lossless (older versions)
-            try:
-                subprocess.run(
-                    ["cjxl", "-q", "100", str(filepath), str(jxl_path)],
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                )
-            except subprocess.CalledProcessError:
-                # Try --lossless for older versions
-                subprocess.run(
-                    ["cjxl", "--lossless", str(filepath), str(jxl_path)],
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                )
+            # Use -q 100 (mathematically lossless for cjxl v0.11+)
+            subprocess.run(
+                ["cjxl", "-q", "100", str(filepath), str(jxl_path)],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
             # Delete original on success
             filepath.unlink()
             
@@ -349,7 +325,7 @@ def convert_jpegs_to_jxl(temp_dir: Path, on_progress=None):
     if failures:
         for filepath, error in failures:
             print(f"Error: Failed to convert {filepath}: {error}", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(EXIT_CONVERSION_ERROR)
 
 
 def create_cbz(output_path: Path, source_dir: Path):
@@ -374,7 +350,7 @@ def create_cbz(output_path: Path, source_dir: Path):
     except subprocess.CalledProcessError as e:
         print(f"Error: Failed to create {output_path}", file=sys.stderr)
         print(f"  zip returned: {e.returncode}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_DEPENDENCY_ERROR)
 
 
 def compute_output_path(
@@ -440,14 +416,17 @@ def process_archive(
         # Print summary line for non-verbose mode if indexing is provided
         if file_index is not None and total_files is not None:
             size_info = f"{format_file_size(input_size)}"
-            print(f"Processing: {input_path.name} - Skipped (unsupported format, {size_info})")
+            print(f"Processing: {input_path.name} - Skipped (archiver not available, {size_info})")
         return input_size, 0, "skipped_format"
     
     if verbose:
         print(f"Processing: {input_path}")
     
+    # Count JPEG images in archive
+    image_count = count_jpegs_in_archive(input_path, fmt_config)
+    
     # Check if archive contains JPEG files before extracting
-    if not archive_contains_jpegs(input_path, fmt_config):
+    if image_count == 0:
         if verbose:
             print(f"  Skipping {input_path}: no JPEG files found")
         # Print summary line for non-verbose mode
@@ -463,8 +442,6 @@ def process_archive(
         print(f"  Would create: {output_path}")
         # Print summary for dry run if file indexing is provided
         if file_index is not None and total_files is not None:
-            # Count images using the shared helper
-            image_count = count_jpegs_in_archive(input_path, fmt_config) if fmt_config else 0
             # For dry run, estimate output size as roughly same as input (we can't know actual size)
             estimated_output_size = input_size  # This is an estimate for dry run
             reduction_pct = 0.0
@@ -514,7 +491,7 @@ def process_archive(
         # Convert JPEGs to JXL
         if verbose:
             print(f"  Converting JPEGs to JXL")
-        convert_jpegs_to_jxl(temp_path, on_progress=progress_cb)
+        convert_jpegs_to_jxl(temp_path, on_progress=progress_cb, verbose=verbose)
 
         # Create output CBZ
         if verbose:
@@ -543,7 +520,7 @@ def process_archive(
     return input_size, output_size, "processed"
 
 
-def create_progress_callback(file_name: str, file_index: int, total_files: int, total_images: int):
+def create_progress_callback(file_name: str, file_index: int, total_files: int, total_images: int) -> tuple[Callable[[int], None], int]:
     """Returns a tuple of (callback, max_line_length) for progress display."""
     # Store the maximum line length for clearing later
     max_line_len = len(f"Processing: {file_name} [{file_index}/{total_files}] |{'=' * 20}| {total_images}/{total_images}")
@@ -573,7 +550,7 @@ def main():
 
     if not archive_files:
         print("No archive files found to process.", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_NO_FILES)
 
     if args.verbose:
         print(f"Found {len(archive_files)} archive file(s) to process")
@@ -633,7 +610,7 @@ def main():
         print(f"\nFailed to process {len(failures)} file(s):", file=sys.stderr)
         for f in failures:
             print(f"  - {f}", file=sys.stderr)
-        sys.exit(2)
+        sys.exit(EXIT_CONVERSION_ERROR)
 
     if args.verbose:
         print(f"\nSuccessfully processed {len(archive_files)} file(s)")
