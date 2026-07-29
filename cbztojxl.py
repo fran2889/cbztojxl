@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Convert CBZ archives containing JPEG images to JXL format."""
+"""Convert CBZ archives containing JPEG images to JXL format.
+
+Requires cjxl v0.11+ for -q 100 (mathematically lossless) conversion.
+"""
 
 __version__ = "1.0.0"
 
