@@ -434,7 +434,7 @@ def process_archive(
             print(f"  Skipping {input_path}: no JPEG files found")
         # Print summary line for non-verbose mode
         if file_index is not None and total_files is not None:
-            print(f"Processing: {input_path.name} - Skipped")
+            print(f"Processing: {input_path.name} - Skipped (no JPEG files)")
         return True  # Not a failure, just skip
 
     # Compute output path early for dry run
@@ -453,6 +453,9 @@ def process_archive(
     if output_path.exists() and not overwrite:
         if verbose:
             print(f"  Skipping {input_path}: {output_path} already exists")
+        # Print summary line for non-verbose mode
+        if file_index is not None and total_files is not None:
+            print(f"Processing: {input_path.name} - Skipped (output exists)")
         return True
 
     # Track max line length for progress bar clearing
