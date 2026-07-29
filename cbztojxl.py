@@ -203,6 +203,28 @@ def is_appledouble_path(path: str) -> bool:
     return False
 
 
+def format_file_size(size_bytes: int) -> str:
+    """Format file size in human-readable format."""
+    if size_bytes == 0:
+        return "0 B"
+    
+    units = ['B', 'KB', 'MB', 'GB', 'TB']
+    unit_index = 0
+    size = float(size_bytes)
+    
+    while size >= 1024 and unit_index < len(units) - 1:
+        size /= 1024
+        unit_index += 1
+    
+    # Format with appropriate precision
+    if unit_index == 0:
+        return f"{int(size)} {units[unit_index]}"
+    elif size < 10:
+        return f"{size:.2f} {units[unit_index]}"
+    else:
+        return f"{size:.1f} {units[unit_index]}"
+
+
 def count_jpegs_in_archive(archive_path: Path, fmt_config: dict) -> int:
     """Count JPEG files in archive using list command.
     
@@ -415,15 +437,25 @@ def process_archive(
     file_index: int = None,
     total_files: int = None,
     show_progress_bar: bool = False,
-) -> bool:
-    """Process a single archive file: extract, convert JPEGs to JXL, repack as CBZ."""
+) -> tuple[bool, int, int, str]:
+    """Process a single archive file: extract, convert JPEGs to JXL, repack as CBZ.
+    
+    Returns:
+        tuple: (success, input_size, output_size, status_message)
+        where status_message can be 'processed', 'skipped_no_jpeg', 'skipped_exists', 'skipped_format'
+    """
     input_path = input_path.resolve()
+    input_size = input_path.stat().st_size
     
     # Get format config - skip silently if not available
     fmt_config = get_format_config(input_path)
     if fmt_config is None:
         # Extension not in available formats (tool missing) - skip silently
-        return True  # Not a failure, just skip
+        # Print summary line for non-verbose mode if indexing is provided
+        if file_index is not None and total_files is not None:
+            size_info = f"{format_file_size(input_size)}"
+            print(f"Processing: {input_path.name} - Skipped (unsupported format, {size_info})")
+        return True, input_size, 0, "skipped_format"
     
     if verbose:
         print(f"Processing: {input_path}")
@@ -434,8 +466,9 @@ def process_archive(
             print(f"  Skipping {input_path}: no JPEG files found")
         # Print summary line for non-verbose mode
         if file_index is not None and total_files is not None:
-            print(f"Processing: {input_path.name} - Skipped (no JPEG files)")
-        return True  # Not a failure, just skip
+            size_info = f"{format_file_size(input_size)}"
+            print(f"Processing: {input_path.name} - Skipped (no JPEG files, {size_info})")
+        return True, input_size, 0, "skipped_no_jpeg"
 
     # Compute output path early for dry run
     output_path = compute_output_path(input_path, base_input, output_dir, overwrite)
@@ -446,17 +479,26 @@ def process_archive(
         if file_index is not None and total_files is not None:
             # Count images using the shared helper
             image_count = count_jpegs_in_archive(input_path, fmt_config) if fmt_config else 0
-            print(f"Processing: {input_path.name} - Done! ({image_count} images)")
-        return True
+            # For dry run, estimate output size as roughly same as input (we can't know actual size)
+            estimated_output_size = input_size  # This is an estimate for dry run
+            reduction_pct = 0.0
+            size_info = f"{format_file_size(input_size)} -> {format_file_size(estimated_output_size)} ({reduction_pct:.1f}%)"
+            print(f"Processing: {input_path.name} - Done! ({image_count} images, {size_info})")
+        return True, input_size, input_size, "processed"
 
     # Check if output exists and overwrite is False
     if output_path.exists() and not overwrite:
         if verbose:
             print(f"  Skipping {input_path}: {output_path} already exists")
+        # Get existing output file size for reporting
+        existing_output_size = output_path.stat().st_size
         # Print summary line for non-verbose mode
         if file_index is not None and total_files is not None:
-            print(f"Processing: {input_path.name} - Skipped (output exists)")
-        return True
+            # Calculate reduction percentage
+            reduction_pct = ((input_size - existing_output_size) / input_size * 100) if input_size > 0 else 0.0
+            size_info = f"{format_file_size(input_size)} -> {format_file_size(existing_output_size)} ({reduction_pct:.1f}%)"
+            print(f"Processing: {input_path.name} - Skipped (output exists, {size_info})")
+        return True, input_size, existing_output_size, "skipped_exists"
 
     # Track max line length for progress bar clearing
     max_line_len = 0
@@ -493,11 +535,17 @@ def process_archive(
             print(f"  Creating: {output_path}")
         create_cbz(output_path, temp_path)
 
+        # Get actual output file size
+        output_size = output_path.stat().st_size
+        
         # Print summary when done (when file indexing is provided)
         if file_index is not None and total_files is not None and not verbose:
+            # Calculate reduction percentage
+            reduction_pct = ((input_size - output_size) / input_size * 100) if input_size > 0 else 0.0
+            size_info = f"{format_file_size(input_size)} -> {format_file_size(output_size)} ({reduction_pct:.1f}%)"
             # Replace progress bar with Done message using carriage return
             # Pad to max line length to clear any remaining characters
-            done_msg = f"Processing: {input_path.name} - Done! ({jpeg_count} images)"
+            done_msg = f"Processing: {input_path.name} - Done! ({jpeg_count} images, {size_info})"
             if max_line_len > 0:
                 padded_msg = done_msg.ljust(max_line_len)
                 print(f"\r{padded_msg}")
@@ -506,7 +554,7 @@ def process_archive(
 
         # Temp dir auto-cleaned by context manager
     
-    return True
+    return True, input_size, output_size, "processed"
 
 
 def create_progress_callback(file_name: str, file_index: int, total_files: int, total_images: int):
@@ -546,6 +594,11 @@ def main():
 
     failures = []
     
+    # Track total sizes for final summary
+    total_input_size = 0
+    total_output_size = 0
+    processed_count = 0
+    
     # Show progress bar only in normal mode (no verbose, no dry run)
     # But show summary line in normal and dry run modes
     show_progress_bar = not args.verbose and not args.dry_run
@@ -553,7 +606,7 @@ def main():
     
     for i, archive_file in enumerate(archive_files, 1):
         try:
-            success = process_archive(
+            success, input_size, output_size, status = process_archive(
                 input_path=archive_file,
                 base_input=input_path,
                 output_dir=output_dir,
@@ -566,12 +619,29 @@ def main():
             )
             if not success:
                 failures.append(archive_file)
+            else:
+                # Accumulate sizes for total summary
+                if status == "processed" or status == "skipped_exists":
+                    total_input_size += input_size
+                    total_output_size += output_size
+                    processed_count += 1
+                elif status == "skipped_no_jpeg" or status == "skipped_format":
+                    # For skipped files (no JPEG or format not available), 
+                    # don't include in total calculation as no processing occurred
+                    processed_count += 1
         except SystemExit as e:
             # process_archive may call sys.exit on some errors
             # In directory mode, we want to continue
             if e.code != 0:
                 failures.append(archive_file)
             continue
+
+    # Print total summary after all files are processed
+    if show_summary and total_input_size > 0:
+        # Calculate total reduction percentage
+        total_reduction_pct = ((total_input_size - total_output_size) / total_input_size * 100) if total_input_size > 0 else 0.0
+        total_size_info = f"{format_file_size(total_input_size)} -> {format_file_size(total_output_size)} ({total_reduction_pct:.1f}%)"
+        print(f"\nTotal: {total_size_info}")
 
     # Report results
     if failures:
