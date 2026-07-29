@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Convert CBZ archives containing JPEG images to JXL format."""
 
+__version__ = "1.0.0"
+
 import argparse
 import os
 import shutil
@@ -108,6 +110,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=False,
         help="Show what would happen without making changes",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     return parser.parse_args()
 
