@@ -14,7 +14,7 @@ from typing import Callable
 # Exit code constants
 EXIT_DEPENDENCY_ERROR = 1
 EXIT_CONVERSION_ERROR = 2
-EXIT_NO_FILES = 1
+EXIT_NO_FILES = 3
 
 # Archive format configurations
 ALL_FORMATS = {
