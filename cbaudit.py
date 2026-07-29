@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Audit comic archives (CBZ, CBR, CB7) for JPEG image quality."""
+"""Audit comic archives (CBZ, CBR, CB7) for JPEG image quality and corruption using ImageMagick."""
 
 import argparse
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -38,9 +37,11 @@ ARCHIVE_FORMATS = {}
 
 def is_tool_available(tool_name: str) -> bool:
     """Check if a command-line tool is available in PATH."""
+    # identify doesn't support --help (tries to decode file), use -help instead
+    help_flag = '-help' if tool_name == 'identify' else '--help'
     try:
         subprocess.run(
-            [tool_name, '--help'],
+            [tool_name, help_flag],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=True,
@@ -125,7 +126,7 @@ def check_dependencies(skip_errors: bool = False):
     """
     global ARCHIVE_FORMATS
     
-    MANDATORY_TOOLS = ['jpeginfo', 'unzip']
+    MANDATORY_TOOLS = ['identify', 'unzip']
     OPTIONAL_TOOLS = {
         'unrar': ['unrar', 'rar'],
         '7z': ['7z'],
@@ -147,7 +148,7 @@ def check_dependencies(skip_errors: bool = False):
     
     if not skip_errors and missing_mandatory:
         print(f"Error: Missing required dependencies: {', '.join(missing_mandatory)}", file=sys.stderr)
-        print("Install jpeginfo from your package manager or https://github.com/tjko/jpeginfo", file=sys.stderr)
+        print("Install imagemagick from your package manager", file=sys.stderr)
         print("Install unzip from your package manager", file=sys.stderr)
         sys.exit(1)
     
@@ -165,7 +166,7 @@ def check_dependencies(skip_errors: bool = False):
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Audit comic archives (CBZ, ZIP, CBR, RAR, CB7, 7Z) "
-                    "for JPEG image quality and corruption."
+                    "for JPEG image quality and corruption using ImageMagick."
     )
     parser.add_argument(
         "input",
@@ -232,36 +233,38 @@ def get_sample_indices(total: int, count: int = 5) -> list[int]:
 
 
 def scan_image(image_path: Path) -> tuple[bool, int | None]:
-    """Run jpeginfo on a single image. Returns (is_ok, quality).
+    """Run identify on a single image. Returns (is_ok, quality).
     
     is_ok: True if image is not corrupted
     quality: integer quality estimate (1-100), or None if unparseable
     """
+    CORRUPTION_PATTERNS = ['error', 'corrupt', 'insufficient image data']
+    
     try:
         result = subprocess.run(
-            ['jpeginfo', '-v', '-c', str(image_path)],
+            ['identify', '-format', '%Q', str(image_path)],
             capture_output=True,
             text=True,
             check=False,
         )
-        output = result.stdout.strip()
+        quality_str = result.stdout.strip()
+        stderr = result.stderr.lower()
         
-        # Parse: [OK] filename.jpg: 85% quality, RGB, 1920x1080
-        # or: [OK] filename.jpg: 85%  RGB  1920x1080
-        match = re.match(r'\[([^\]]+)\]\s+[^:]+:\s*(\d+)%?\s*quality', output, re.IGNORECASE)
-        if match:
-            status = match.group(1).upper()
-            quality = int(match.group(2))
-            is_ok = status == 'OK'
-            return (is_ok, quality)
+        # Strict corruption check
+        is_corrupted = (
+            result.returncode != 0
+            or any(pattern in stderr for pattern in CORRUPTION_PATTERNS)
+        )
         
-        # Check for CORRUPT status
-        if '[CORRUPT]' in output.upper():
-            return (False, None)
+        # Extract quality if available
+        quality = None
+        if quality_str:
+            try:
+                quality = int(quality_str)
+            except ValueError:
+                pass
         
-        # Fallback: check exit code
-        is_ok = result.returncode == 0
-        return (is_ok, None)
+        return (not is_corrupted, quality)
         
     except (subprocess.CalledProcessError, FileNotFoundError, OSError):
         return (False, None)
