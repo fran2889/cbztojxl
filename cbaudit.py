@@ -11,9 +11,19 @@ import sys
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Callable, TypedDict
+
+
+class ArchiveFormatConfig(TypedDict):
+    """Type definition for archive format configuration."""
+    extensions: list[str]
+    extract_cmd: list[str]
+    list_cmd: list[str]
+    requires: list[str]
+
 
 # Archive format configurations - duplicated from cbztojxl
-ALL_FORMATS = {
+ALL_FORMATS: dict[str, ArchiveFormatConfig] = {
     'zip': {
         'extensions': ['.cbz', '.zip'],
         'extract_cmd': ['unzip', '-q', '{archive}', '-d', '{output}'],
@@ -34,7 +44,17 @@ ALL_FORMATS = {
     },
 }
 
-ARCHIVE_FORMATS = {}
+ARCHIVE_FORMATS: dict[str, ArchiveFormatConfig] = {}
+
+
+class ArchiveExtractionError(Exception):
+    """Raised when archive extraction fails."""
+    pass
+
+
+class DependencyError(Exception):
+    """Raised when required dependencies are missing."""
+    pass
 
 
 def is_tool_available(tool_name: str) -> bool:
@@ -80,7 +100,7 @@ def temp_dir(source_path: Path):
         shutil.rmtree(temp_path, ignore_errors=True)
 
 
-def get_format_config(file_path: Path) -> dict | None:
+def get_format_config(file_path: Path) -> ArchiveFormatConfig | None:
     """Get format config for a file based on its extension."""
     ext = file_path.suffix.lower()
     for fmt_name, fmt_config in ARCHIVE_FORMATS.items():
@@ -209,10 +229,11 @@ def parse_args():
     return parser.parse_args()
 
 
-def extract_archive(archive_path: Path, output_dir: Path, fmt_config: dict) -> bool:
+def extract_archive(archive_path: Path, output_dir: Path, fmt_config: ArchiveFormatConfig) -> None:
     """Extract archive using format-specific command.
     
-    Returns: True on success, False on failure.
+    Raises:
+        ArchiveExtractionError: If extraction fails.
     """
     cmd = [c.format(archive=str(archive_path), output=str(output_dir)) 
            for c in fmt_config['extract_cmd']]
@@ -223,10 +244,8 @@ def extract_archive(archive_path: Path, output_dir: Path, fmt_config: dict) -> b
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        return True
     except subprocess.CalledProcessError as e:
-        print(f"Error: Failed to extract {archive_path}. Command returned {e.returncode}.", file=sys.stderr)
-        return False
+        raise ArchiveExtractionError(f"Failed to extract {archive_path}: command returned {e.returncode}")
 
 
 def get_sample_indices(total: int, count: int = 5) -> list[int]:
@@ -275,7 +294,7 @@ def scan_image(image_path: Path) -> tuple[bool, int | None]:
         return (False, None)
 
 
-def scan_images(image_paths: list[Path], on_progress=None) -> tuple[list[bool], list[int], list[Path]]:
+def scan_images(image_paths: list[Path], on_progress: Callable[[int], None] | None = None) -> tuple[list[bool], list[int | None], list[Path]]:
     """Scan multiple images. Returns (corrupted_flags, quality_scores, corrupted_paths).
     
     Args:
@@ -288,7 +307,7 @@ def scan_images(image_paths: list[Path], on_progress=None) -> tuple[list[bool], 
     for i, path in enumerate(image_paths):
         is_ok, quality = scan_image(path)
         corrupted.append(not is_ok)
-        qualities.append(quality if quality is not None else 0)
+        qualities.append(quality)
         if not is_ok:
             corrupted_paths.append(path)
         if on_progress:
@@ -325,17 +344,17 @@ def print_archive_report(
     total_images: int,
     sampled_count: int,
     corrupted_count: int,
-    qualities: list[int],
+    qualities: list[int | None],
     corrupted_paths: list[Path],
     threshold: int,
     verbose: bool,
 ) -> bool:
     """Print report for a single archive. Returns True if has issues."""
-    valid_qualities = [q for q in qualities if q is not None and q > 0]
+    valid_qualities = [q for q in qualities if q is not None]
     avg_quality = sum(valid_qualities) / len(valid_qualities) if valid_qualities else 0
     
     is_unreadable = corrupted_count > 0
-    is_low_quality = avg_quality < threshold and valid_qualities
+    is_low_quality = avg_quality < threshold if valid_qualities else False
     
     if is_unreadable and is_low_quality:
         status = "UNREADABLE + LOW QUALITY"
@@ -401,7 +420,10 @@ def process_archive(
         return (False, 0, 0)
     
     with temp_dir(input_path) as temp_path:
-        if not extract_archive(input_path, temp_path, fmt_config):
+        try:
+            extract_archive(input_path, temp_path, fmt_config)
+        except ArchiveExtractionError as e:
+            print(f"Error: {e}", file=sys.stderr)
             # Extraction failed - treat as having issues
             return (True, 0, 0)
         
@@ -428,8 +450,8 @@ def process_archive(
         
         scanned_count = len(selected)
         
-        # Create progress callback for full scan
-        if full_scan and scanned_count > 1:
+        # Create progress callback for full scan (only in non-verbose mode)
+        if full_scan and scanned_count > 1 and not verbose:
             progress_cb, max_line_len = create_image_progress_callback(input_path.name, scanned_count)
         else:
             progress_cb = None
