@@ -26,7 +26,7 @@ ALL_FORMATS = {
     },
     '7z': {
         'extensions': ['.cb7', '.7z'],
-        'extract_cmd': ['7z', 'x', '{archive}', '-o{output}', '-y'],
+        'extract_cmd': ['7z', 'x', '{archive}', '-o', '{output}', '-y'],
         'list_cmd': ['7z', 'l', '{archive}'],
         'requires': ['7z'],
     },
@@ -304,20 +304,6 @@ def temp_dir(source_path: Path):
         # Clean up temp directory
         shutil.rmtree(temp_path, ignore_errors=True)
 
-
-def extract_cbz(cbz_path: Path, output_dir: Path):
-    """Extract CBZ (ZIP) archive to output directory."""
-    try:
-        subprocess.run(
-            ["unzip", "-q", str(cbz_path), "-d", str(output_dir)],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except subprocess.CalledProcessError as e:
-        print(f"Error: Failed to extract {cbz_path}", file=sys.stderr)
-        print(f"  unzip returned: {e.returncode}", file=sys.stderr)
-        sys.exit(1)
 
 
 def convert_jpegs_to_jxl(temp_dir: Path, on_progress=None):
