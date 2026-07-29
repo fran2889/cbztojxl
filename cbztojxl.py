@@ -184,10 +184,26 @@ def get_format_config(file_path: Path) -> dict | None:
     return None
 
 
-def archive_contains_jpegs(archive_path: Path, fmt_config: dict) -> bool:
-    """Check if archive contains any JPEG files using list command.
+def is_appledouble_path(path: str) -> bool:
+    """Check if a file path is an AppleDouble metadata file.
     
-    Returns True if JPEG files (.jpg, .jpeg) are found, False otherwise.
+    AppleDouble files start with '._' or are inside '__MACOSX' directories.
+    """
+    path_lower = path.lower()
+    # Check for __MACOSX in any path component
+    if '__macosx' in path_lower.split('/'):
+        return True
+    # Check for ._ prefix in the filename
+    basename = path_lower.rsplit('/', 1)[-1]
+    if basename.startswith('._'):
+        return True
+    return False
+
+
+def count_jpegs_in_archive(archive_path: Path, fmt_config: dict) -> int:
+    """Count JPEG files in archive using list command.
+    
+    Returns the count of .jpg/.jpeg files, or 0 on error.
     """
     cmd = [c.format(archive=str(archive_path)) for c in fmt_config['list_cmd']]
     try:
@@ -197,14 +213,38 @@ def archive_contains_jpegs(archive_path: Path, fmt_config: dict) -> bool:
             text=True,
             check=True,
         )
-        # Check if any line in output ends with .jpg or .jpeg (case-insensitive)
+        count = 0
         for line in result.stdout.splitlines():
             lower_line = line.lower()
-            if lower_line.endswith('.jpg') or lower_line.endswith('.jpeg'):
+            if (lower_line.endswith('.jpg') or lower_line.endswith('.jpeg')) \
+               and not is_appledouble_path(lower_line):
+                count += 1
+        return count
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return 0
+
+
+def archive_contains_jpegs(archive_path: Path, fmt_config: dict) -> bool:
+    """Check if archive contains any JPEG files using list command.
+    
+    Returns True if JPEG files (.jpg, .jpeg) are found, False otherwise.
+    If listing fails, returns True to be safe (don't skip).
+    """
+    cmd = [c.format(archive=str(archive_path)) for c in fmt_config['list_cmd']]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        for line in result.stdout.splitlines():
+            lower_line = line.lower()
+            if (lower_line.endswith('.jpg') or lower_line.endswith('.jpeg')) \
+               and not is_appledouble_path(lower_line):
                 return True
         return False
     except (subprocess.CalledProcessError, FileNotFoundError):
-        # If listing fails, assume it has JPEGs to be safe (don't skip)
         return True
 
 
@@ -259,9 +299,11 @@ def convert_jpegs_to_jxl(temp_dir: Path, on_progress=None):
     """Convert all .jpg/.jpeg files in temp_dir to .jxl, delete originals (recursively)."""
     failures = []
     
-    # Find all JPEG files recursively
+    # Find all JPEG files recursively, excluding AppleDouble metadata files
     jpeg_files = [f for f in temp_dir.rglob("*") 
-                  if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg")]
+                  if f.is_file() 
+                  and f.suffix.lower() in (".jpg", ".jpeg")
+                  and not is_appledouble_path(str(f))]
     
     for i, filepath in enumerate(jpeg_files):
         jxl_path = filepath.with_suffix(".jxl")
@@ -399,17 +441,8 @@ def process_archive(
         print(f"  Would create: {output_path}")
         # Print summary for dry run if file indexing is provided
         if file_index is not None and total_files is not None:
-            # For dry run, we need to count images to show in summary
-            # Count images without extracting (using unzip -l)
-            try:
-                result = subprocess.run(
-                    ["unzip", "-l", str(input_path)],
-                    capture_output=True, text=True, check=True
-                )
-                image_count = sum(1 for line in result.stdout.splitlines()
-                                  if line.lower().endswith(".jpg") or line.lower().endswith(".jpeg"))
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                image_count = 0
+            # Count images using the shared helper
+            image_count = count_jpegs_in_archive(input_path, fmt_config) if fmt_config else 0
             print(f"Processing: {input_path.name} - Done! ({image_count} images)")
         return True
 
@@ -428,7 +461,9 @@ def process_archive(
         
         # Count images for progress tracking (recursively)
         jpeg_files = [f for f in temp_path.rglob("*") 
-                      if f.is_file() and f.suffix.lower() in (".jpg", ".jpeg")]
+                      if f.is_file() 
+                      and f.suffix.lower() in (".jpg", ".jpeg")
+                      and not is_appledouble_path(str(f))]
         jpeg_count = len(jpeg_files)
         
         # Set up progress callback if progress bar should be shown
