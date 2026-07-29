@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Audit comic archives (CBZ, CBR, CB7) for JPEG image quality and corruption using ImageMagick."""
 
+__version__ = "1.0.0"
+
 import argparse
 import os
 import shutil
@@ -203,6 +205,11 @@ def parse_args():
         action="store_true",
         default=False,
         help="Show what would be scanned without running",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     return parser.parse_args()
 
