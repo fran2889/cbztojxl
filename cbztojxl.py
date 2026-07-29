@@ -496,11 +496,11 @@ def process_archive(
         print(f"  Would create: {output_path}")
         # Print summary for dry run if file indexing is provided
         if file_index is not None and total_files is not None:
-            # For dry run, estimate output size as roughly same as input (we can't know actual size)
-            estimated_output_size = input_size  # This is an estimate for dry run
+            # For dry run, estimate output size as ~70% of input (JXL typically reduces size by ~30%)
+            estimated_output_size = int(input_size * 0.7)
             size_info = format_size_reduction(input_size, estimated_output_size)
             print(f"Processing: {input_path.name} - Done! ({image_count} images, {size_info})")
-        return input_size, input_size, "processed"
+        return input_size, estimated_output_size, "processed"
 
     # Check if output exists and overwrite is False
     if output_path.exists() and not overwrite:
