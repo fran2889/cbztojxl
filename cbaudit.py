@@ -98,14 +98,13 @@ def find_archive_files(input_path: Path, recursive: bool) -> list[Path]:
         supported_extensions.extend(fmt['extensions'])
 
     if not supported_extensions:
-        print("Error: No archive formats available (zip/unzip required)", file=sys.stderr)
+        print("Error: No archive formats available. Install unzip and ImageMagick.", file=sys.stderr)
         sys.exit(1)
 
     if input_path.is_file():
         if input_path.suffix.lower() in supported_extensions:
             return [input_path]
-        print(f"Error: {input_path} is not a valid archive file", file=sys.stderr)
-        print(f"Supported formats: {', '.join(sorted(set(supported_extensions)))}", file=sys.stderr)
+        print(f"Error: {input_path} is not a valid archive file. Supported formats: {', '.join(sorted(set(supported_extensions)))}.", file=sys.stderr)
         sys.exit(1)
 
     if input_path.is_dir():
@@ -114,7 +113,7 @@ def find_archive_files(input_path: Path, recursive: bool) -> list[Path]:
         return [f for f in all_files 
                 if f.is_file() and f.suffix.lower() in supported_extensions]
 
-    print(f"Error: {input_path} is not a valid file or directory", file=sys.stderr)
+    print(f"Error: {input_path} is not a valid file or directory.", file=sys.stderr)
     sys.exit(1)
 
 
@@ -149,18 +148,14 @@ def check_dependencies(skip_errors: bool = False):
                        if all(is_tool_available(t) for t in v['requires'])}
     
     if not skip_errors and missing_mandatory:
-        print(f"Error: Missing required dependencies: {', '.join(missing_mandatory)}", file=sys.stderr)
-        print("Install imagemagick from your package manager", file=sys.stderr)
-        print("Install unzip from your package manager", file=sys.stderr)
+        print(f"Error: Missing required dependencies: {', '.join(missing_mandatory)}. Install ImageMagick and unzip from your package manager.", file=sys.stderr)
         sys.exit(1)
     
     if not skip_errors:
         if not available_optional.get('unrar'):
-            print("Warning: unrar not found, CBR/RAR files will be skipped", file=sys.stderr)
+            print("Warning: unrar not found. CBR/RAR files will be skipped.", file=sys.stderr)
         if not available_optional.get('7z'):
-            print("Warning: 7z not found, CB7/7Z files will be skipped", file=sys.stderr)
-        if not available_optional.get('unrar') or not available_optional.get('7z'):
-            print(file=sys.stderr)
+            print("Warning: 7z not found. CB7/7Z files will be skipped.", file=sys.stderr)
     
     return len(missing_mandatory) == 0
 
@@ -230,8 +225,7 @@ def extract_archive(archive_path: Path, output_dir: Path, fmt_config: dict) -> b
         )
         return True
     except subprocess.CalledProcessError as e:
-        print(f"Error: Failed to extract {archive_path}", file=sys.stderr)
-        print(f"  Command returned: {e.returncode}", file=sys.stderr)
+        print(f"Error: Failed to extract {archive_path}. Command returned {e.returncode}.", file=sys.stderr)
         return False
 
 
@@ -281,8 +275,8 @@ def scan_image(image_path: Path) -> tuple[bool, int | None]:
         return (False, None)
 
 
-def scan_images(image_paths: list[Path], on_progress=None) -> tuple[list[bool], list[int]]:
-    """Scan multiple images. Returns (corrupted_flags, quality_scores).
+def scan_images(image_paths: list[Path], on_progress=None) -> tuple[list[bool], list[int], list[Path]]:
+    """Scan multiple images. Returns (corrupted_flags, quality_scores, corrupted_paths).
     
     Args:
         image_paths: List of image paths to scan
@@ -290,13 +284,16 @@ def scan_images(image_paths: list[Path], on_progress=None) -> tuple[list[bool], 
     """
     corrupted = []
     qualities = []
+    corrupted_paths = []
     for i, path in enumerate(image_paths):
         is_ok, quality = scan_image(path)
         corrupted.append(not is_ok)
         qualities.append(quality if quality is not None else 0)
+        if not is_ok:
+            corrupted_paths.append(path)
         if on_progress:
             on_progress(i + 1)
-    return (corrupted, qualities)
+    return (corrupted, qualities, corrupted_paths)
 
 
 def create_file_progress_callback(total: int):
@@ -329,6 +326,7 @@ def print_archive_report(
     sampled_count: int,
     corrupted_count: int,
     qualities: list[int],
+    corrupted_paths: list[Path],
     threshold: int,
     verbose: bool,
 ) -> bool:
@@ -363,6 +361,8 @@ def print_archive_report(
         
         if is_unreadable:
             print(f"  Corrupted images:")
+            for cp in corrupted_paths:
+                print(f"    {cp.name}")
     else:
         parts = []
         if is_unreadable:
@@ -397,7 +397,7 @@ def process_archive(
     
     if dry_run:
         if file_index is not None and total_files is not None:
-            print(f"Processing: {input_path.name} - Would scan")
+            print(f"Would scan: {input_path.name}")
         return (False, 0, 0)
     
     with temp_dir(input_path) as temp_path:
@@ -414,7 +414,7 @@ def process_archive(
         
         if total_jpegs == 0:
             if verbose:
-                print(f"\n{input_path.name}: No JPEG files found")
+                print(f"\n{input_path.name}: No JPEG images found.")
             return (False, total_jpegs, 0)
         
         # Sort for deterministic sampling
@@ -440,7 +440,7 @@ def process_archive(
             # For non-verbose, we'll clear the progress bar after
             pass
         
-        corrupted, qualities = scan_images(selected, on_progress=progress_cb)
+        corrupted, qualities, corrupted_paths = scan_images(selected, on_progress=progress_cb)
         corrupted_count = sum(corrupted)
         
         # Clear progress bar before reporting
@@ -456,6 +456,7 @@ def process_archive(
             scanned_count,
             corrupted_count,
             qualities,
+            corrupted_paths,
             threshold,
             verbose,
         )
@@ -472,7 +473,7 @@ def main():
     archive_files = find_archive_files(input_path, args.recursive)
     
     if not archive_files:
-        print("No archive files found to process.", file=sys.stderr)
+        print("Error: No archive files found to process.", file=sys.stderr)
         sys.exit(1)
     
     total_files = len(archive_files)
@@ -504,17 +505,13 @@ def main():
         print()  # Newline after progress
     
     if args.dry_run:
-        print(f"\nDry run: would scan {total_files} archive(s)")
+        print(f"\nDry run: would scan {total_files} archive(s).")
         sys.exit(0)
     
-    if args.verbose:
-        if issues_found > 0:
-            print(f"\nDone. {issues_found} archive(s) with issues.")
-        else:
-            print(f"\nDone. All {total_files} archive(s) OK.")
-    else:
-        if issues_found > 0:
-            print(f"\nFound {issues_found} archive(s) with issues.")
+    if issues_found > 0:
+        print(f"\nFound {issues_found} archive(s) with issues.")
+    elif args.verbose:
+        print(f"\nAll {total_files} archive(s) OK.")
     
     sys.exit(0 if issues_found == 0 else 1)
 

@@ -480,7 +480,7 @@ def process_archive(
         # Print summary line for non-verbose mode if indexing is provided
         if file_index is not None and total_files is not None:
             size_info = f"{format_file_size(input_size)}"
-            print(f"Processing: {input_path.name} - Skipped (archiver not available, {size_info})")
+            print(f"Processing: {input_path.name} - Skipped (archiver not available)")
         return input_size, 0, "skipped_format"
     
     if verbose:
@@ -496,20 +496,29 @@ def process_archive(
         # Print summary line for non-verbose mode
         if file_index is not None and total_files is not None:
             size_info = f"{format_file_size(input_size)}"
-            print(f"Processing: {input_path.name} - Skipped (no JPEG files, {size_info})")
+            print(f"Processing: {input_path.name} - Skipped (no JPEG files)")
         return input_size, 0, "skipped_no_jpeg"
 
     # Compute output path early for dry run
     output_path = compute_output_path(input_path, base_input, output_dir, overwrite)
     
+    # Compute display target for summary line
+    if output_dir is None:
+        target_display = output_path.name
+    else:
+        try:
+            target_display = str(output_path.relative_to(output_dir.resolve()))
+        except ValueError:
+            target_display = output_path.name
+
     if dry_run:
-        print(f"  Would create: {output_path}")
-        # Print summary for dry run if file indexing is provided
+        if verbose:
+            print(f"  Would create: {output_path}")
+        # For dry run, estimate output size as ~70% of input (JXL typically reduces size by ~30%)
+        estimated_output_size = int(input_size * 0.7)
         if file_index is not None and total_files is not None:
-            # For dry run, estimate output size as ~70% of input (JXL typically reduces size by ~30%)
-            estimated_output_size = int(input_size * 0.7)
             size_info = format_size_reduction(input_size, estimated_output_size)
-            print(f"Processing: {input_path.name} - Done! ({image_count} images, {size_info})")
+            print(f"Processing: {input_path.name} => {target_display} - Done! ({image_count} images, {size_info})")
         return input_size, estimated_output_size, "processed"
 
     # Check if output exists and overwrite is False
@@ -521,7 +530,7 @@ def process_archive(
         # Print summary line for non-verbose mode
         if file_index is not None and total_files is not None:
             size_info = format_size_reduction(input_size, existing_output_size)
-            print(f"Processing: {input_path.name} - Skipped (output exists, {size_info})")
+            print(f"Processing: {input_path.name} - Skipped (output exists)")
         return input_size, 0, "skipped_exists"
 
     # Track max line length for progress bar clearing
@@ -546,7 +555,7 @@ def process_archive(
         # Set up progress callback if progress bar should be shown
         if show_progress_bar and file_index is not None and total_files is not None:
             progress_cb, max_line_len = create_progress_callback(
-                input_path.name, file_index, total_files, jpeg_count
+                input_path.name, file_index, total_files, jpeg_count, target_display
             )
         else:
             progress_cb = None
@@ -573,12 +582,16 @@ def process_archive(
         # Get actual output file size
         output_size = output_path.stat().st_size
         
+
+        if verbose:
+            size_info = format_size_reduction(input_size, output_size)
+            print(f"  Done! {jpeg_count} images, {size_info}")
         # Print summary when done (when file indexing is provided)
         if file_index is not None and total_files is not None and not verbose:
             size_info = format_size_reduction(input_size, output_size)
             # Replace progress bar with Done message using carriage return
             # Pad to max line length to clear any remaining characters
-            done_msg = f"Processing: {input_path.name} - Done! ({jpeg_count} images, {size_info})"
+            done_msg = f"Processing: {input_path.name} => {target_display} - Done! ({jpeg_count} images, {size_info})"
             if max_line_len > 0:
                 padded_msg = done_msg.ljust(max_line_len)
                 print(f"\r{padded_msg}")
@@ -590,10 +603,19 @@ def process_archive(
     return input_size, output_size, "processed"
 
 
-def create_progress_callback(file_name: str, file_index: int, total_files: int, total_images: int) -> tuple[Callable[[int], None], int]:
+def create_progress_callback(file_name: str, file_index: int, total_files: int, total_images: int, target_display: str = "") -> tuple[Callable[[int], None], int]:
     """Returns a tuple of (callback, max_line_length) for progress display."""
-    # Store the maximum line length for clearing later
-    max_line_len = len(f"Processing: {file_name} [{file_index}/{total_files}] |{'=' * PROGRESS_BAR_WIDTH}| {total_images}/{total_images}")
+    # Progress bar line length (when complete)
+    progress_line = f"Processing: {file_name} [{file_index}/{total_files}] |{'=' * PROGRESS_BAR_WIDTH}| {total_images}/{total_images}"
+    
+    # Summary line length estimate
+    # The actual summary line will be: Processing: {file_name} => {target_display} - Done! ({jpeg_count} images, {size_info})
+    # We don't have jpeg_count and size_info here, but we can estimate
+    summary_line_estimate = f"Processing: {file_name} => {target_display} - Done! ({total_images} images, )"
+    # Add a buffer for size_info (roughly 50 chars max)
+    summary_line_estimate += "X" * 50
+    
+    max_line_len = max(len(progress_line), len(summary_line_estimate))
     
     def callback(current_image: int):
         if total_images <= 0:
@@ -630,7 +652,8 @@ def main() -> None:
     # Track total sizes for final summary
     total_input_size = 0
     total_output_size = 0
-    processed_count = 0
+    successful_count = 0
+    skipped_count = 0
     
     # Show progress bar only in normal mode (no verbose, no dry run)
     # But show summary line in normal and dry run modes
@@ -653,10 +676,10 @@ def main() -> None:
         if status == "processed":
             total_input_size += input_size
             total_output_size += output_size
-            processed_count += 1
+            successful_count += 1
         elif status == "skipped_no_jpeg" or status == "skipped_format" or status == "skipped_exists":
             # For skipped files, don't include in total calculation as no processing occurred
-            processed_count += 1
+            skipped_count += 1
         elif status.startswith("error_"):
             # Track processing errors
             failures.append(archive_file)
@@ -674,7 +697,7 @@ def main() -> None:
         sys.exit(EXIT_CONVERSION_ERROR)
 
     if args.verbose:
-        print(f"\nSuccessfully processed {len(archive_files)} file(s)")
+        print(f"\nProcessed {successful_count}, skipped {skipped_count}, total {len(archive_files)} file(s)")
 
     sys.exit(0)
 
