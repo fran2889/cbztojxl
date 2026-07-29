@@ -207,8 +207,11 @@ def parse_args():
     return parser.parse_args()
 
 
-def extract_archive(archive_path: Path, output_dir: Path, fmt_config: dict):
-    """Extract archive using format-specific command."""
+def extract_archive(archive_path: Path, output_dir: Path, fmt_config: dict) -> bool:
+    """Extract archive using format-specific command.
+    
+    Returns: True on success, False on failure.
+    """
     cmd = [c.format(archive=str(archive_path), output=str(output_dir)) 
            for c in fmt_config['extract_cmd']]
     try:
@@ -218,10 +221,11 @@ def extract_archive(archive_path: Path, output_dir: Path, fmt_config: dict):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        return True
     except subprocess.CalledProcessError as e:
         print(f"Error: Failed to extract {archive_path}", file=sys.stderr)
         print(f"  Command returned: {e.returncode}", file=sys.stderr)
-        sys.exit(1)
+        return False
 
 
 def get_sample_indices(total: int, count: int = 5) -> list[int]:
@@ -390,7 +394,9 @@ def process_archive(
         return (False, 0, 0)
     
     with temp_dir(input_path) as temp_path:
-        extract_archive(input_path, temp_path, fmt_config)
+        if not extract_archive(input_path, temp_path, fmt_config):
+            # Extraction failed - treat as having issues
+            return (True, 0, 0)
         
         jpeg_files = [f for f in temp_path.rglob("*") 
                       if f.is_file() 
@@ -472,24 +478,20 @@ def main():
         file_cb = None
     
     for i, archive_file in enumerate(archive_files, 1):
-        try:
-            has_issues, total_jpegs, scanned = process_archive(
-                input_path=archive_file,
-                full_scan=args.full_scan,
-                threshold=args.threshold,
-                verbose=args.verbose,
-                dry_run=args.dry_run,
-                file_index=i if not args.verbose else None,
-                total_files=total_files if not args.verbose else None,
-            )
-            if has_issues:
-                issues_found += 1
-            
-            if file_cb:
-                file_cb(i)
-                
-        except SystemExit:
-            continue
+        has_issues, total_jpegs, scanned = process_archive(
+            input_path=archive_file,
+            full_scan=args.full_scan,
+            threshold=args.threshold,
+            verbose=args.verbose,
+            dry_run=args.dry_run,
+            file_index=i if not args.verbose else None,
+            total_files=total_files if not args.verbose else None,
+        )
+        if has_issues:
+            issues_found += 1
+        
+        if file_cb:
+            file_cb(i)
     
     if file_cb:
         print()  # Newline after progress
