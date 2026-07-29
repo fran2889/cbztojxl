@@ -16,6 +16,16 @@ EXIT_DEPENDENCY_ERROR = 1
 EXIT_CONVERSION_ERROR = 2
 EXIT_NO_FILES = 3
 
+
+class ConversionError(Exception):
+    """Raised when archive processing fails."""
+    pass
+
+
+class DependencyError(Exception):
+    """Raised when required dependencies are missing."""
+    pass
+
 # Archive format configurations
 ALL_FORMATS = {
     'zip': {
@@ -257,7 +267,11 @@ def count_jpegs_in_archive(archive_path: Path, fmt_config: dict) -> int:
 
 
 def extract_archive(archive_path: Path, output_dir: Path, fmt_config: dict):
-    """Extract archive using format-specific command."""
+    """Extract archive using format-specific command.
+    
+    Raises:
+        DependencyError: If extraction fails.
+    """
     # Build command by formatting placeholders
     cmd = [c.format(archive=str(archive_path), output=str(output_dir)) 
            for c in fmt_config['extract_cmd']]
@@ -269,9 +283,7 @@ def extract_archive(archive_path: Path, output_dir: Path, fmt_config: dict):
             stderr=subprocess.DEVNULL,
         )
     except subprocess.CalledProcessError as e:
-        print(f"Error: Failed to extract {archive_path}", file=sys.stderr)
-        print(f"  Command returned: {e.returncode}", file=sys.stderr)
-        sys.exit(EXIT_DEPENDENCY_ERROR)
+        raise DependencyError(f"Failed to extract {archive_path}: command returned {e.returncode}")
 
 
 @contextmanager
@@ -289,8 +301,12 @@ def temp_dir(source_path: Path):
 
 
 
-def convert_jpegs_to_jxl(temp_dir: Path, on_progress=None, verbose: bool = False):
-    """Convert all .jpg/.jpeg files in temp_dir to .jxl, delete originals (recursively)."""
+def convert_jpegs_to_jxl(temp_dir: Path, on_progress=None, verbose: bool = False) -> list[tuple[Path, Exception]]:
+    """Convert all .jpg/.jpeg files in temp_dir to .jxl, delete originals (recursively).
+    
+    Returns:
+        List of (filepath, error) tuples for any failures.
+    """
     failures = []
     
     # Find all JPEG files recursively, excluding AppleDouble metadata files
@@ -322,14 +338,15 @@ def convert_jpegs_to_jxl(temp_dir: Path, on_progress=None, verbose: bool = False
         except subprocess.CalledProcessError as e:
             failures.append((filepath, e))
 
-    if failures:
-        for filepath, error in failures:
-            print(f"Error: Failed to convert {filepath}: {error}", file=sys.stderr)
-        sys.exit(EXIT_CONVERSION_ERROR)
+    return failures
 
 
 def create_cbz(output_path: Path, source_dir: Path):
-    """Create a CBZ (ZIP) archive from files in source_dir."""
+    """Create a CBZ (ZIP) archive from files in source_dir.
+    
+    Raises:
+        DependencyError: If zip creation fails.
+    """
     output_path = output_path.resolve()
 
     # Ensure parent directory exists
@@ -348,9 +365,7 @@ def create_cbz(output_path: Path, source_dir: Path):
             stderr=subprocess.DEVNULL,
         )
     except subprocess.CalledProcessError as e:
-        print(f"Error: Failed to create {output_path}", file=sys.stderr)
-        print(f"  zip returned: {e.returncode}", file=sys.stderr)
-        sys.exit(EXIT_DEPENDENCY_ERROR)
+        raise DependencyError(f"Failed to create {output_path}: zip returned {e.returncode}")
 
 
 def compute_output_path(
@@ -404,7 +419,14 @@ def process_archive(
     
     Returns:
         tuple: (input_size, output_size, status_message)
-        where status_message can be 'processed', 'skipped_no_jpeg', 'skipped_exists', 'skipped_format'
+        where status_message can be:
+        - 'processed' - successfully converted
+        - 'skipped_no_jpeg' - no JPEG files in archive
+        - 'skipped_exists' - output already exists and overwrite=False
+        - 'skipped_format' - archive format not available
+        - 'error_extract' - extraction failed
+        - 'error_convert' - JXL conversion failed
+        - 'error_create' - CBZ creation failed
     """
     input_path = input_path.resolve()
     input_size = input_path.stat().st_size
@@ -466,12 +488,19 @@ def process_archive(
     # Track max line length for progress bar clearing
     max_line_len = 0
     
+    # Track max line length for progress bar clearing
+    max_line_len = 0
+    
     # Create temp directory in same filesystem as input
     with temp_dir(input_path) as temp_path:
-        # Extract archive
-        if verbose:
-            print(f"  Extracting to: {temp_path}")
-        extract_archive(input_path, temp_path, fmt_config)
+        try:
+            # Extract archive
+            if verbose:
+                print(f"  Extracting to: {temp_path}")
+            extract_archive(input_path, temp_path, fmt_config)
+        except DependencyError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return input_size, 0, "error_extract"
         
         # Count images for progress tracking (recursively)
         jpeg_files = [f for f in temp_path.rglob("*") 
@@ -491,12 +520,21 @@ def process_archive(
         # Convert JPEGs to JXL
         if verbose:
             print(f"  Converting JPEGs to JXL")
-        convert_jpegs_to_jxl(temp_path, on_progress=progress_cb, verbose=verbose)
+        failures = convert_jpegs_to_jxl(temp_path, on_progress=progress_cb, verbose=verbose)
+        
+        if failures:
+            for filepath, error in failures:
+                print(f"Error: Failed to convert {filepath}: {error}", file=sys.stderr)
+            return input_size, 0, "error_convert"
 
         # Create output CBZ
         if verbose:
             print(f"  Creating: {output_path}")
-        create_cbz(output_path, temp_path)
+        try:
+            create_cbz(output_path, temp_path)
+        except DependencyError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return input_size, 0, "error_create"
 
         # Get actual output file size
         output_size = output_path.stat().st_size
@@ -568,35 +606,29 @@ def main():
     show_summary = not args.verbose  # Show summary in normal and dry run, but not verbose
     
     for i, archive_file in enumerate(archive_files, 1):
-        try:
-            input_size, output_size, status = process_archive(
-                input_path=archive_file,
-                base_input=input_path,
-                output_dir=output_dir,
-                overwrite=args.overwrite,
-                verbose=args.verbose,
-                dry_run=args.dry_run,
-                file_index=i if show_summary else None,
-                total_files=len(archive_files) if show_summary else None,
-                show_progress_bar=show_progress_bar,
-            )
-            # process_archive() uses sys.exit() for failures, caught below
-            # All return paths indicate some form of success (including skips)
-            # Accumulate sizes for total summary
-            if status == "processed" or status == "skipped_exists":
-                total_input_size += input_size
-                total_output_size += output_size
-                processed_count += 1
-            elif status == "skipped_no_jpeg" or status == "skipped_format":
-                # For skipped files (no JPEG or format not available), 
-                # don't include in total calculation as no processing occurred
-                processed_count += 1
-        except SystemExit as e:
-            # process_archive may call sys.exit on some errors
-            # In directory mode, we want to continue
-            if e.code != 0:
-                failures.append(archive_file)
-            continue
+        input_size, output_size, status = process_archive(
+            input_path=archive_file,
+            base_input=input_path,
+            output_dir=output_dir,
+            overwrite=args.overwrite,
+            verbose=args.verbose,
+            dry_run=args.dry_run,
+            file_index=i if show_summary else None,
+            total_files=len(archive_files) if show_summary else None,
+            show_progress_bar=show_progress_bar,
+        )
+        # Accumulate sizes for total summary
+        if status == "processed" or status == "skipped_exists":
+            total_input_size += input_size
+            total_output_size += output_size
+            processed_count += 1
+        elif status == "skipped_no_jpeg" or status == "skipped_format":
+            # For skipped files (no JPEG or format not available), 
+            # don't include in total calculation as no processing occurred
+            processed_count += 1
+        elif status.startswith("error_"):
+            # Track processing errors
+            failures.append(archive_file)
 
     # Print total summary after all files are processed
     if show_summary and total_input_size > 0:
