@@ -499,7 +499,7 @@ def process_archive(
         if file_index is not None and total_files is not None:
             size_info = format_size_reduction(input_size, existing_output_size)
             print(f"Processing: {input_path.name} - Skipped (output exists, {size_info})")
-        return input_size, existing_output_size, "skipped_exists"
+        return input_size, 0, "skipped_exists"
 
     # Track max line length for progress bar clearing
     max_line_len = 0
@@ -627,13 +627,12 @@ def main() -> None:
             show_progress_bar=show_progress_bar,
         )
         # Accumulate sizes for total summary
-        if status == "processed" or status == "skipped_exists":
+        if status == "processed":
             total_input_size += input_size
             total_output_size += output_size
             processed_count += 1
-        elif status == "skipped_no_jpeg" or status == "skipped_format":
-            # For skipped files (no JPEG or format not available), 
-            # don't include in total calculation as no processing occurred
+        elif status == "skipped_no_jpeg" or status == "skipped_format" or status == "skipped_exists":
+            # For skipped files, don't include in total calculation as no processing occurred
             processed_count += 1
         elif status.startswith("error_"):
             # Track processing errors
