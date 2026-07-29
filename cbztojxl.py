@@ -15,16 +15,19 @@ ALL_FORMATS = {
     'zip': {
         'extensions': ['.cbz', '.zip'],
         'extract_cmd': ['unzip', '-q', '{archive}', '-d', '{output}'],
+        'list_cmd': ['unzip', '-l', '{archive}'],
         'requires': ['unzip'],
     },
     'rar': {
         'extensions': ['.cbr', '.rar'],
         'extract_cmd': ['unrar', 'x', '-o+', '{archive}', '{output}'],
+        'list_cmd': ['unrar', 'l', '{archive}'],
         'requires': ['unrar'],
     },
     '7z': {
         'extensions': ['.cb7', '.7z'],
         'extract_cmd': ['7z', 'x', '{archive}', '-o{output}', '-y'],
+        'list_cmd': ['7z', 'l', '{archive}'],
         'requires': ['7z'],
     },
 }
@@ -179,6 +182,30 @@ def get_format_config(file_path: Path) -> dict | None:
         if ext in fmt_config['extensions']:
             return fmt_config
     return None
+
+
+def archive_contains_jpegs(archive_path: Path, fmt_config: dict) -> bool:
+    """Check if archive contains any JPEG files using list command.
+    
+    Returns True if JPEG files (.jpg, .jpeg) are found, False otherwise.
+    """
+    cmd = [c.format(archive=str(archive_path)) for c in fmt_config['list_cmd']]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        # Check if any line in output ends with .jpg or .jpeg (case-insensitive)
+        for line in result.stdout.splitlines():
+            lower_line = line.lower()
+            if lower_line.endswith('.jpg') or lower_line.endswith('.jpeg'):
+                return True
+        return False
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        # If listing fails, assume it has JPEGs to be safe (don't skip)
+        return True
 
 
 def extract_archive(archive_path: Path, output_dir: Path, fmt_config: dict):
@@ -355,6 +382,15 @@ def process_archive(
     
     if verbose:
         print(f"Processing: {input_path}")
+    
+    # Check if archive contains JPEG files before extracting
+    if not archive_contains_jpegs(input_path, fmt_config):
+        if verbose:
+            print(f"  Skipping {input_path}: no JPEG files found")
+        # Print summary line for non-verbose mode
+        if file_index is not None and total_files is not None:
+            print(f"Processing: {input_path.name} - Skipped")
+        return True  # Not a failure, just skip
 
     # Compute output path early for dry run
     output_path = compute_output_path(input_path, base_input, output_dir, overwrite)
