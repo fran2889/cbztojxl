@@ -223,11 +223,14 @@ def format_size_reduction(input_size: int, output_size: int) -> str:
     return f"{format_file_size(input_size)} -> {format_file_size(output_size)} ({reduction_pct:.1f}%)"
 
 
-def is_appledouble_path(path: str) -> bool:
+def is_appledouble_path(path: str | os.PathLike) -> bool:
     """Check if a file path is an AppleDouble metadata file.
     
     AppleDouble files start with '._' or are inside '__MACOSX' directories.
+    Accepts both str and PathLike objects.
     """
+    # Standardize path to str to handle both str and PathLike inputs
+    path = str(path)
     # Use os.path for cross-platform path handling
     path_lower = path.lower()
     # Check for __MACOSX in any path component
