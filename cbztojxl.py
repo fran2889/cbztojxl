@@ -16,6 +16,9 @@ EXIT_DEPENDENCY_ERROR = 1
 EXIT_CONVERSION_ERROR = 2
 EXIT_NO_FILES = 3
 
+# UI constants
+PROGRESS_BAR_WIDTH = 20
+
 
 class ConversionError(Exception):
     """Raised when archive processing fails."""
@@ -577,14 +580,14 @@ def process_archive(
 def create_progress_callback(file_name: str, file_index: int, total_files: int, total_images: int) -> tuple[Callable[[int], None], int]:
     """Returns a tuple of (callback, max_line_length) for progress display."""
     # Store the maximum line length for clearing later
-    max_line_len = len(f"Processing: {file_name} [{file_index}/{total_files}] |{'=' * 20}| {total_images}/{total_images}")
+    max_line_len = len(f"Processing: {file_name} [{file_index}/{total_files}] |{'=' * PROGRESS_BAR_WIDTH}| {total_images}/{total_images}")
     
     def callback(current_image: int):
         if total_images <= 0:
             filled = 0
         else:
-            filled = int(20 * current_image / total_images)
-        bar = '=' * filled + ' ' * (20 - filled)
+            filled = int(PROGRESS_BAR_WIDTH * current_image / total_images)
+        bar = '=' * filled + ' ' * (PROGRESS_BAR_WIDTH - filled)
         line = f"Processing: {file_name} [{file_index}/{total_files}] |{bar}| {current_image}/{total_images}"
         # Pad to max length and use carriage return
         padded_line = line.ljust(max_line_len)
