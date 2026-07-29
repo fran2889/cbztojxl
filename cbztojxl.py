@@ -9,7 +9,7 @@ import sys
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 # Exit code constants
 EXIT_DEPENDENCY_ERROR = 1
@@ -52,7 +52,7 @@ ALL_FORMATS = {
 ARCHIVE_FORMATS = {}
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Convert comic archives (CBZ, ZIP, CBR, RAR, CB7, 7Z) "
                     "containing JPEG images to JXL format in CBZ containers."
@@ -111,7 +111,7 @@ def is_tool_available(tool_name: str) -> bool:
         return False
 
 
-def check_dependencies():
+def check_dependencies() -> None:
     """Verify required tools are available in PATH.
     
     Mandatory tools (cjxl, zip, unzip) cause script to exit if missing.
@@ -266,7 +266,7 @@ def count_jpegs_in_archive(archive_path: Path, fmt_config: dict) -> int:
 
 
 
-def extract_archive(archive_path: Path, output_dir: Path, fmt_config: dict):
+def extract_archive(archive_path: Path, output_dir: Path, fmt_config: dict) -> None:
     """Extract archive using format-specific command.
     
     Raises:
@@ -287,7 +287,7 @@ def extract_archive(archive_path: Path, output_dir: Path, fmt_config: dict):
 
 
 @contextmanager
-def temp_dir(source_path: Path):
+def temp_dir(source_path: Path) -> Iterator[Path]:
     """Context manager for temp directory in same filesystem as source."""
     source_dir = source_path.parent if source_path.is_file() else source_path
     source_dir = source_dir.resolve()
@@ -341,7 +341,7 @@ def convert_jpegs_to_jxl(temp_dir: Path, on_progress=None, verbose: bool = False
     return failures
 
 
-def create_cbz(output_path: Path, source_dir: Path):
+def create_cbz(output_path: Path, source_dir: Path) -> None:
     """Create a CBZ (ZIP) archive from files in source_dir.
     
     Raises:
@@ -576,7 +576,7 @@ def create_progress_callback(file_name: str, file_index: int, total_files: int, 
     return callback, max_line_len
 
 
-def main():
+def main() -> None:
     args = parse_args()
     check_dependencies()
 
