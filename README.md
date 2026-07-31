@@ -107,6 +107,12 @@ python3 pdftocbz.py comic.pdf --fallback-dpi 400 -v
 python3 pdftocbz.py /path/to/pdfs/ --dry-run
 ```
 
+Each completed comic reports the number of unchanged embedded JPEGs extracted losslessly and the number of pages that were re-rendered:
+
+```text
+Created: comic.cbz (12 pages: 9 lossless, 3 re-rendered)
+```
+
 ## Comic archive auditing
 
 `cbaudit.py` checks sampled JPEG pages for corruption and inferred JPEG encoding quality. Use `--full-scan` to inspect every JPEG instead of five evenly spaced pages.

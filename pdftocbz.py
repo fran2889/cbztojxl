@@ -69,6 +69,15 @@ class EmbeddedImage:
     y_ppi: float
 
 
+@dataclass(frozen=True)
+class PageBuildResult:
+    """Counts of the methods used to build a comic's page images."""
+
+    total: int
+    lossless: int
+    rerendered: int
+
+
 def parse_pdfimages_list(output: str) -> list[EmbeddedImage]:
     """Parse image records from ``pdfimages -list`` output."""
     images = []
@@ -162,9 +171,13 @@ def render_page(pdf_path: Path, page: int, dpi: int, destination: Path) -> None:
     )
 
 
-def build_page_images(pdf_path: Path, work_dir: Path, fallback_dpi: int, verbose: bool) -> int:
+def build_page_images(
+    pdf_path: Path, work_dir: Path, fallback_dpi: int, verbose: bool
+) -> PageBuildResult:
     """Create one JPEG under work_dir/pages for every PDF page."""
     page_count = get_page_count(pdf_path)
+    lossless = 0
+    rerendered = 0
     images = parse_pdfimages_list(run_command(["pdfimages", "-list", str(pdf_path)]).stdout)
     extracted_dir = work_dir / "extracted"
     pages_dir = work_dir / "pages"
@@ -177,16 +190,18 @@ def build_page_images(pdf_path: Path, work_dir: Path, fallback_dpi: int, verbose
         direct = None if page_has_text(pdf_path, page) else select_direct_image(images, page, extracted_dir)
         if direct is not None:
             shutil.copyfile(direct, destination)
+            lossless += 1
             if verbose:
                 print(f"  Page {page}: preserved embedded JPEG")
         else:
             dpi = select_render_dpi(images, page, fallback_dpi)
             render_page(pdf_path, page, dpi, destination)
+            rerendered += 1
             if verbose:
                 print(f"  Page {page}: rendered at {dpi} DPI")
         if not destination.is_file():
             raise RuntimeError(f"No JPEG created for page {page}")
-    return page_count
+    return PageBuildResult(page_count, lossless, rerendered)
 
 
 def create_cbz(output_path: Path, pages_dir: Path) -> None:
@@ -211,9 +226,12 @@ def process_pdf(input_path: Path, base_input: Path, output_dir: Path | None, ove
         return "processed"
     try:
         with temp_dir(input_path) as work_dir:
-            pages = build_page_images(input_path, work_dir, fallback_dpi, verbose)
+            result = build_page_images(input_path, work_dir, fallback_dpi, verbose)
             create_cbz(output_path, work_dir / "pages")
-        print(f"Created: {output_path} ({pages} pages)")
+        print(
+            f"Created: {output_path} ({result.total} pages: "
+            f"{result.lossless} lossless, {result.rerendered} re-rendered)"
+        )
         return "processed"
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"Error: {input_path}: {error}", file=sys.stderr)

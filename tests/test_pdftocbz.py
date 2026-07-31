@@ -1,8 +1,9 @@
 import importlib.util
+import io
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 MODULE_PATH = Path(__file__).parents[1] / "pdftocbz.py"
@@ -12,6 +13,55 @@ SPEC.loader.exec_module(pdftocbz)
 
 
 class PdfToCbzUnitTests(unittest.TestCase):
+    def test_build_page_images_counts_lossless_and_rerendered_pages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            direct = root / "direct.jpg"
+            direct.write_bytes(b"original")
+            work_dir = root / "work"
+            work_dir.mkdir()
+
+            def render_page(_pdf_path, _page, _dpi, destination):
+                destination.write_bytes(b"rendered")
+
+            command_result = MagicMock(stdout="")
+            with (
+                patch.object(pdftocbz, "get_page_count", return_value=2),
+                patch.object(pdftocbz, "run_command", return_value=command_result),
+                patch.object(pdftocbz.subprocess, "run"),
+                patch.object(pdftocbz, "page_has_text", return_value=False),
+                patch.object(pdftocbz, "select_direct_image", side_effect=[direct, None]),
+                patch.object(pdftocbz, "render_page", side_effect=render_page),
+            ):
+                result = pdftocbz.build_page_images(Path("comic.pdf"), work_dir, 300, False)
+
+        self.assertEqual(
+            result,
+            pdftocbz.PageBuildResult(total=2, lossless=1, rerendered=1),
+        )
+
+    def test_process_pdf_prints_page_method_counts(self):
+        temporary = MagicMock()
+        temporary.__enter__.return_value = Path("work")
+        result = pdftocbz.PageBuildResult(total=12, lossless=9, rerendered=3)
+
+        with (
+            patch.object(pdftocbz, "compute_output_path", return_value=Path("comic.cbz")),
+            patch.object(pdftocbz, "temp_dir", return_value=temporary),
+            patch.object(pdftocbz, "build_page_images", return_value=result),
+            patch.object(pdftocbz, "create_cbz"),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            status = pdftocbz.process_pdf(
+                Path("comic.pdf"), Path("."), None, False, False, False, 300
+            )
+
+        self.assertEqual(status, "processed")
+        self.assertEqual(
+            stdout.getvalue().strip(),
+            "Created: comic.cbz (12 pages: 9 lossless, 3 re-rendered)",
+        )
+
     def test_render_page_uses_single_page_jpeg_command(self):
         with patch("pdftocbz.subprocess.run") as run:
             pdftocbz.render_page(Path("comic.pdf"), 2, 300, Path("0002.jpg"))
