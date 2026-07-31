@@ -5,7 +5,7 @@ Convert comic archive files (CBZ, CBR, CB7, ZIP, RAR, 7Z) containing JPEG images
 ## Installation
 
 Requires:
-- Python 3.6+
+- Python 3.10+
 - [cjxl from libjxl](https://github.com/libjxl/libjxl)
 - zip and unzip utilities (usually pre-installed on Linux/macOS)
 - Optional: unrar/rar (for CBR/RAR support)
@@ -66,6 +66,22 @@ python cbztojxl.py /comics/ /backup/ -r --dry-run
 - **Output directory specified:** Creates files in output directory without suffix, preserving relative directory structure
 - **Output directory = source directory + `--overwrite`:** Replaces original files in place
 
+Every nonempty run prints a standard result line for each discovered archive,
+followed by a total line with archive counts and the combined size reduction for
+completed conversions:
+
+```text
+[done]  series/in.cbz => series/out.cbz | 24 pages | 100 B => 75 B (25.0% smaller)
+
+[total] 4 archives | 2 done, 1 skipped, 1 failed | 150 B => 115 B (23.3% smaller)
+```
+
+Verbose mode retains these standard result and total lines while adding extraction,
+per-page conversion, and archive-creation details. Temporary extraction directories
+are created beneath the destination tree and removed before success is reported;
+cleanup failures are reported as archive errors. Errors always include their detailed
+diagnostic in both regular and verbose modes.
+
 ## Exit Codes
 
 | Code | Meaning |
@@ -73,6 +89,7 @@ python cbztojxl.py /comics/ /backup/ -r --dry-run
 | 0 | Success |
 | 1 | CLI or dependency error |
 | 2 | One or more conversion failures |
+| 3 | No archive files found |
 
 ## Supported Formats
 
@@ -85,7 +102,8 @@ python cbztojxl.py /comics/ /backup/ -r --dry-run
 | .cb7 | 7z | .cbz (ZIP) | 7z (optional) |
 | .7z | 7z | .cbz (ZIP) | 7z (optional) |
 
-**Note:** If optional tools (unrar, 7z) are not installed, matching files will be silently skipped.
+**Note:** If an optional tool (unrar or 7z) is not installed, matching files are
+still discovered and receive an `[skip] ... | archiver not available` result.
 
 ## PDF to CBZ conversion
 
