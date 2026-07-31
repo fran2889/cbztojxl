@@ -446,6 +446,29 @@ def compute_output_path(
     return result.with_suffix('.cbz')
 
 
+def report_processed(
+    input_path: Path,
+    input_size: int,
+    output_size: int,
+    jpeg_count: int,
+    verbose: bool,
+    file_index: int | None,
+    total_files: int | None,
+    target_display: str,
+    max_line_len: int = 0,
+) -> None:
+    """Report successful processing with consistent normal and dry-run output."""
+    size_info = format_size_reduction(input_size, output_size)
+    if verbose:
+        print(f"  Done! {jpeg_count} images, {size_info}")
+    elif file_index is not None and total_files is not None:
+        done_msg = (
+            f"Processing: {input_path.name} => {target_display} - Done! "
+            f"({jpeg_count} images, {size_info})"
+        )
+        print(f"\r{done_msg.ljust(max_line_len)}" if max_line_len > 0 else done_msg)
+
+
 def process_archive(
     input_path: Path,
     base_input: Path,
@@ -511,16 +534,6 @@ def process_archive(
         except ValueError:
             target_display = output_path.name
 
-    if dry_run:
-        if verbose:
-            print(f"  Would create: {output_path}")
-        # For dry run, estimate output size as ~70% of input (JXL typically reduces size by ~30%)
-        estimated_output_size = int(input_size * 0.7)
-        if file_index is not None and total_files is not None:
-            size_info = format_size_reduction(input_size, estimated_output_size)
-            print(f"Processing: {input_path.name} => {target_display} - Done! ({image_count} images, {size_info})")
-        return input_size, estimated_output_size, "processed"
-
     # Check if output exists and overwrite is False
     if output_path.exists() and not overwrite:
         if verbose:
@@ -532,6 +545,14 @@ def process_archive(
             size_info = format_size_reduction(input_size, existing_output_size)
             print(f"Processing: {input_path.name} - Skipped (output exists)")
         return input_size, 0, "skipped_exists"
+
+    if dry_run:
+        output_size = input_size
+        report_processed(
+            input_path, input_size, output_size, image_count,
+            verbose, file_index, total_files, target_display,
+        )
+        return input_size, output_size, "processed"
 
     # Track max line length for progress bar clearing
     max_line_len = 0
@@ -583,20 +604,10 @@ def process_archive(
         output_size = output_path.stat().st_size
         
 
-        if verbose:
-            size_info = format_size_reduction(input_size, output_size)
-            print(f"  Done! {jpeg_count} images, {size_info}")
-        # Print summary when done (when file indexing is provided)
-        if file_index is not None and total_files is not None and not verbose:
-            size_info = format_size_reduction(input_size, output_size)
-            # Replace progress bar with Done message using carriage return
-            # Pad to max line length to clear any remaining characters
-            done_msg = f"Processing: {input_path.name} => {target_display} - Done! ({jpeg_count} images, {size_info})"
-            if max_line_len > 0:
-                padded_msg = done_msg.ljust(max_line_len)
-                print(f"\r{padded_msg}")
-            else:
-                print(done_msg)
+        report_processed(
+            input_path, input_size, output_size, jpeg_count,
+            verbose, file_index, total_files, target_display, max_line_len,
+        )
 
         # Temp dir auto-cleaned by context manager
     
@@ -704,4 +715,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
