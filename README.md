@@ -86,3 +86,23 @@ python cbztojxl.py /comics/ /backup/ -r --dry-run
 | .7z | 7z | .cbz (ZIP) | 7z (optional) |
 
 **Note:** If optional tools (unrar, 7z) are not installed, matching files will be silently skipped.
+
+## PDF to CBZ conversion
+
+`pdftocbz.py` creates a conventional CBZ with one JPEG per PDF page. It preserves an embedded JPEG unchanged when a page has no extractable text and exactly one JPEG image; every other page is rendered.
+
+Requires Python 3.6+, Poppler utilities (`pdfinfo`, `pdftotext`, `pdfimages`, `pdftocairo`), and `zip`.
+
+```bash
+# Create comic.cbz next to comic.pdf
+python3 pdftocbz.py comic.pdf
+
+# Convert a directory while preserving its structure in /backup
+python3 pdftocbz.py /path/to/pdfs/ /backup/ -r
+
+# Use a higher fallback rendering resolution and show per-page decisions
+python3 pdftocbz.py comic.pdf --fallback-dpi 400 -v
+
+# Inspect planned outputs without writing files
+python3 pdftocbz.py /path/to/pdfs/ --dry-run
+```
