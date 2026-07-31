@@ -106,3 +106,19 @@ python3 pdftocbz.py comic.pdf --fallback-dpi 400 -v
 # Inspect planned outputs without writing files
 python3 pdftocbz.py /path/to/pdfs/ --dry-run
 ```
+
+## Comic archive auditing
+
+`cbaudit.py` checks sampled JPEG pages for corruption and inferred JPEG encoding quality. Use `--full-scan` to inspect every JPEG instead of five evenly spaced pages.
+
+An optional page-size metric flags archives whose selected JPEG pages have a small average raw file size:
+
+```bash
+# Use the default 100 KB average threshold
+python3 cbaudit.py comic.cbz --page-size
+
+# Use a custom 150 KB average threshold
+python3 cbaudit.py comic.cbz --page-size 150
+```
+
+Page-size checking is disabled unless `--page-size` is supplied. Sizes are measured after extraction, use 1 KB = 1,024 bytes, and complement rather than replace the JPEG-quality check.

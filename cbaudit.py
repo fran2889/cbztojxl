@@ -180,6 +180,17 @@ def check_dependencies(skip_errors: bool = False):
     return len(missing_mandatory) == 0
 
 
+def positive_int(value: str) -> int:
+    """Parse a strictly positive command-line integer."""
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a positive integer") from error
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Audit comic archives (CBZ, ZIP, CBR, RAR, CB7, 7Z) "
@@ -202,6 +213,15 @@ def parse_args():
         type=int,
         default=70,
         help="Quality threshold for LOW QUALITY classification (default: 70)",
+    )
+    parser.add_argument(
+        "--page-size",
+        nargs="?",
+        type=positive_int,
+        const=100,
+        default=None,
+        metavar="KB",
+        help="Flag archives averaging below KB per page (default when enabled: 100)",
     )
     parser.add_argument(
         "-r", "--recursive",
@@ -315,6 +335,11 @@ def scan_images(image_paths: list[Path], on_progress: Callable[[int], None] | No
     return (corrupted, qualities, corrupted_paths)
 
 
+def get_file_sizes(image_paths: list[Path]) -> list[int]:
+    """Return raw sizes in bytes for the selected image files."""
+    return [path.stat().st_size for path in image_paths]
+
+
 def create_file_progress_callback(total: int):
     """Create callback for file-level progress."""
     def callback(current: int):
@@ -348,50 +373,64 @@ def print_archive_report(
     corrupted_paths: list[Path],
     threshold: int,
     verbose: bool,
+    page_sizes: list[int] | None = None,
+    page_size_threshold: int | None = None,
 ) -> bool:
-    """Print report for a single archive. Returns True if has issues."""
+    """Print report for a single archive. Returns True if it has issues."""
     valid_qualities = [q for q in qualities if q is not None]
     avg_quality = sum(valid_qualities) / len(valid_qualities) if valid_qualities else 0
-    
+    avg_page_bytes = (
+        sum(page_sizes) / len(page_sizes)
+        if page_size_threshold is not None and page_sizes
+        else None
+    )
+
     is_unreadable = corrupted_count > 0
     is_low_quality = avg_quality < threshold if valid_qualities else False
-    
-    if is_unreadable and is_low_quality:
-        status = "UNREADABLE + LOW QUALITY"
-    elif is_unreadable:
-        status = "UNREADABLE"
-    elif is_low_quality:
-        status = "LOW QUALITY"
-    else:
-        status = "OK"
-    
-    has_issues = is_unreadable or is_low_quality
-    
+    is_small_pages = (
+        avg_page_bytes < page_size_threshold * 1024
+        if avg_page_bytes is not None and page_size_threshold is not None
+        else False
+    )
+
+    statuses = []
+    if is_unreadable:
+        statuses.append("UNREADABLE")
+    if is_low_quality:
+        statuses.append("LOW QUALITY")
+    if is_small_pages:
+        statuses.append("SMALL PAGES")
+    status = " + ".join(statuses) if statuses else "OK"
+    has_issues = bool(statuses)
+
     if not verbose and not has_issues:
         return False
-    
+
     if verbose:
         print(f"\n{archive_name} [{status}]")
         print(f"  Sampled {sampled_count}/{total_images} images, avg quality: {avg_quality:.0f}")
-        
+        if avg_page_bytes is not None and page_size_threshold is not None:
+            print(
+                f"  Average page size: {avg_page_bytes / 1024:.0f} KB "
+                f"(threshold: {page_size_threshold} KB)"
+            )
         if is_low_quality:
             low_q = sum(1 for q in valid_qualities if q < threshold)
             print(f"  Low quality: {low_q}/{sampled_count} images below threshold {threshold}")
-        
         if is_unreadable:
-            print(f"  Corrupted images:")
-            for cp in corrupted_paths:
-                print(f"    {cp.name}")
+            print("  Corrupted images:")
+            for corrupted_path in corrupted_paths:
+                print(f"    {corrupted_path.name}")
     else:
         parts = []
         if is_unreadable:
             parts.append(f"{corrupted_count} corrupted")
         if is_low_quality:
             parts.append(f"avg={avg_quality:.0f}")
-        
-        if parts:
-            print(f"{archive_name}: {status} ({', '.join(parts)})")
-    
+        if is_small_pages and avg_page_bytes is not None:
+            parts.append(f"avg page={avg_page_bytes / 1024:.0f} KB")
+        print(f"{archive_name}: {status} ({', '.join(parts)})")
+
     return has_issues
 
 
@@ -403,6 +442,7 @@ def process_archive(
     dry_run: bool,
     file_index: int | None = None,
     total_files: int | None = None,
+    page_size_threshold: int | None = None,
 ) -> tuple[bool, int, int]:
     """Process a single archive: extract, scan images, report.
     
@@ -464,6 +504,17 @@ def process_archive(
         
         corrupted, qualities, corrupted_paths = scan_images(selected, on_progress=progress_cb)
         corrupted_count = sum(corrupted)
+
+        page_sizes = None
+        if page_size_threshold is not None:
+            try:
+                page_sizes = get_file_sizes(selected)
+            except OSError as error:
+                print(
+                    f"Error: Could not read page sizes for {input_path.name}: {error}",
+                    file=sys.stderr,
+                )
+                return (True, total_jpegs, scanned_count)
         
         # Clear progress bar before reporting
         if progress_cb and not verbose:
@@ -481,6 +532,8 @@ def process_archive(
             corrupted_paths,
             threshold,
             verbose,
+            page_sizes=page_sizes,
+            page_size_threshold=page_size_threshold,
         )
         
         return (has_issues, total_jpegs, scanned_count)
@@ -516,6 +569,7 @@ def main():
             dry_run=args.dry_run,
             file_index=i if not args.verbose else None,
             total_files=total_files if not args.verbose else None,
+            page_size_threshold=args.page_size,
         )
         if has_issues:
             issues_found += 1
