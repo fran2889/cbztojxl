@@ -13,6 +13,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, TypedDict
 
+from zip_support import ZipArchiveError, extract_zip_archive
+
 
 class ArchiveFormatConfig(TypedDict):
     """Type definition for archive format configuration."""
@@ -26,9 +28,9 @@ class ArchiveFormatConfig(TypedDict):
 ALL_FORMATS: dict[str, ArchiveFormatConfig] = {
     'zip': {
         'extensions': ['.cbz', '.zip'],
-        'extract_cmd': ['unzip', '-q', '{archive}', '-d', '{output}'],
-        'list_cmd': ['unzip', '-l', '{archive}'],
-        'requires': ['unzip'],
+        'extract_cmd': [],
+        'list_cmd': [],
+        'requires': [],
     },
     'rar': {
         'extensions': ['.cbr', '.rar'],
@@ -118,7 +120,7 @@ def find_archive_files(input_path: Path, recursive: bool) -> list[Path]:
         supported_extensions.extend(fmt['extensions'])
 
     if not supported_extensions:
-        print("Error: No archive formats available. Install unzip and ImageMagick.", file=sys.stderr)
+        print("Error: No archive formats available. Install ImageMagick.", file=sys.stderr)
         sys.exit(1)
 
     if input_path.is_file():
@@ -130,8 +132,11 @@ def find_archive_files(input_path: Path, recursive: bool) -> list[Path]:
     if input_path.is_dir():
         pattern = "**/*" if recursive else "*"
         all_files = list(input_path.glob(pattern))
-        return [f for f in all_files 
-                if f.is_file() and f.suffix.lower() in supported_extensions]
+        return sorted(
+            (f for f in all_files if f.is_file()
+             and f.suffix.lower() in supported_extensions),
+            key=lambda path: path.relative_to(input_path).as_posix(),
+        )
 
     print(f"Error: {input_path} is not a valid file or directory.", file=sys.stderr)
     sys.exit(1)
@@ -147,7 +152,7 @@ def check_dependencies(skip_errors: bool = False):
     """
     global ARCHIVE_FORMATS
     
-    MANDATORY_TOOLS = ['identify', 'unzip']
+    MANDATORY_TOOLS = ['identify']
     OPTIONAL_TOOLS = {
         'unrar': ['unrar', 'rar'],
         '7z': ['7z'],
@@ -168,7 +173,7 @@ def check_dependencies(skip_errors: bool = False):
                        if all(is_tool_available(t) for t in v['requires'])}
     
     if not skip_errors and missing_mandatory:
-        print(f"Error: Missing required dependencies: {', '.join(missing_mandatory)}. Install ImageMagick and unzip from your package manager.", file=sys.stderr)
+        print(f"Error: Missing required dependencies: {', '.join(missing_mandatory)}. Install ImageMagick from your package manager.", file=sys.stderr)
         sys.exit(1)
     
     if not skip_errors:
@@ -255,6 +260,13 @@ def extract_archive(archive_path: Path, output_dir: Path, fmt_config: ArchiveFor
     Raises:
         ArchiveExtractionError: If extraction fails.
     """
+    if fmt_config is ALL_FORMATS['zip']:
+        try:
+            extract_zip_archive(archive_path, output_dir)
+        except ZipArchiveError as error:
+            raise ArchiveExtractionError(str(error)) from error
+        return
+
     cmd = [c.format(archive=str(archive_path), output=str(output_dir)) 
            for c in fmt_config['extract_cmd']]
     try:

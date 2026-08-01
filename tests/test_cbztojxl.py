@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zipfile
 from argparse import Namespace
 from contextlib import nullcontext
 from pathlib import Path
@@ -293,46 +294,39 @@ class CbzToJxlDiscoveryAndPathSafetyTests(unittest.TestCase):
     def setUp(self):
         self.format_config = cbztojxl.ALL_FORMATS["zip"]
 
-    def test_list_command_failure_is_not_reported_as_zero_pages(self):
-        error = subprocess.CalledProcessError(
-            9,
-            ["unzip", "-l", "/private/volume.cbz"],
-            stderr=b"corrupt archive\n",
-        )
-        with patch("subprocess.run", side_effect=error):
+    def test_invalid_zip_listing_is_not_reported_as_zero_pages(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "volume.cbz"
+            archive.write_bytes(b"not a zip")
             with self.assertRaisesRegex(
                 cbztojxl.DependencyError,
-                "^unzip exited with status 9: corrupt archive$",
+                "^ZIP archive is invalid or uses unsupported features$",
             ):
                 cbztojxl.count_jpegs_in_archive(
-                    Path("/private/volume.cbz"), self.format_config
+                    archive, self.format_config
                 )
 
-    def test_missing_list_tool_is_an_extraction_failure(self):
-        error = FileNotFoundError(2, "No such file or directory", "/private/unzip")
-        with patch("subprocess.run", side_effect=error):
+    def test_missing_zip_file_is_an_extraction_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(
                 cbztojxl.DependencyError,
-                "^unzip failed: No such file or directory$",
+                "^ZIP archive is invalid or uses unsupported features$",
             ):
                 cbztojxl.count_jpegs_in_archive(
-                    Path("/private/volume.cbz"), self.format_config
+                    Path(directory) / "missing.cbz", self.format_config
                 )
 
-    def test_archive_listing_decodes_invalid_bytes_with_replacement(self):
-        result = subprocess.CompletedProcess(
-            ["unzip", "-l", "/private/volume.cbz"],
-            0,
-            stdout=b"\xffpage.jpg\n",
-            stderr=b"",
-        )
-        with patch("subprocess.run", return_value=result) as run:
+    def test_archive_listing_counts_jpegs_from_zip_members(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "volume.cbz"
+            with zipfile.ZipFile(archive, "w") as output:
+                output.writestr("page.jpg", b"jpeg")
+                output.writestr("note.txt", b"note")
             count = cbztojxl.count_jpegs_in_archive(
-                Path("/private/volume.cbz"), self.format_config
+                archive, self.format_config
             )
 
         self.assertEqual(count, 1)
-        self.assertNotIn("text", run.call_args.kwargs)
 
     def test_listing_failure_is_an_extract_error_in_both_modes(self):
         for verbose in (False, True):
@@ -388,6 +382,35 @@ class CbzToJxlDiscoveryAndPathSafetyTests(unittest.TestCase):
                 discovered = cbztojxl.find_archive_files(root, recursive=False)
 
         self.assertEqual(set(discovered), {cbz, cbr})
+
+    def test_discovery_orders_archives_by_relative_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "z.cbz").touch()
+            nested = root / "series"
+            nested.mkdir()
+            (nested / "a.cbz").touch()
+            (root / "A.cbz").touch()
+
+            discovered = cbztojxl.find_archive_files(root, recursive=True)
+
+        self.assertEqual(
+            [path.relative_to(root).as_posix() for path in discovered],
+            ["A.cbz", "series/a.cbz", "z.cbz"],
+        )
+
+    def test_zip_listing_uses_native_library_without_subprocess(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "comic.cbz"
+            with zipfile.ZipFile(archive, "w") as output:
+                output.writestr("page.jpg", b"jpeg")
+                output.writestr("notes.txt", b"notes")
+            with patch.object(cbztojxl.subprocess, "run", side_effect=AssertionError):
+                count = cbztojxl.count_jpegs_in_archive(
+                    archive, cbztojxl.ALL_FORMATS["zip"]
+                )
+
+        self.assertEqual(count, 1)
 
     def test_invalid_input_diagnostic_hides_absolute_path_and_controls(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -629,12 +652,9 @@ class CbzToJxlDiscoveryAndPathSafetyTests(unittest.TestCase):
             source_dir.mkdir()
             (source_dir / "page.jxl").write_bytes(b"jxl")
             output.write_bytes(b"original-archive")
-            error = subprocess.CalledProcessError(
-                15,
-                ["zip", str(output), "."],
-                stderr=b"could not create output file\n",
-            )
-            with patch("subprocess.run", side_effect=error):
+            with patch.object(
+                cbztojxl, "write_zip_archive", side_effect=cbztojxl.ZipArchiveError("could not create ZIP archive")
+            ):
                 with self.assertRaises(cbztojxl.DependencyError):
                     cbztojxl.create_cbz(output, source_dir)
 
@@ -649,22 +669,20 @@ class CbzToJxlDiscoveryAndPathSafetyTests(unittest.TestCase):
             (source_dir / "page.jxl").write_bytes(b"jxl")
             output.write_bytes(b"original-archive")
 
-            def create_staged_archive(command, **_kwargs):
-                staged_path = Path(command[3])
+            def create_staged_archive(staged_path, _source_dir):
                 self.assertEqual(staged_path.parent.parent, output.parent)
                 self.assertTrue(staged_path.parent.name.startswith(".cbztojxl_stage_"))
                 self.assertEqual(staged_path.parent.stat().st_mode & 0o077, 0)
                 self.assertFalse(staged_path.exists())
-                staged_path.write_bytes(b"new-archive")
+                with zipfile.ZipFile(staged_path, "w") as archive:
+                    archive.writestr("page.jxl", b"jxl")
 
-            with patch("subprocess.run", side_effect=create_staged_archive) as run:
+            with patch.object(cbztojxl, "write_zip_archive", side_effect=create_staged_archive):
                 cbztojxl.create_cbz(output, source_dir)
 
-            staged_argument = Path(run.call_args.args[0][3])
-            self.assertNotEqual(staged_argument, output)
-            self.assertEqual(staged_argument.parent.parent, output.parent)
-            self.assertFalse(staged_argument.parent.exists())
-            self.assertEqual(output.read_bytes(), b"new-archive")
+            self.assertFalse(any(root.glob(".cbztojxl_stage_*")))
+            with zipfile.ZipFile(output) as archive:
+                self.assertEqual(archive.namelist(), ["page.jxl"])
 
     def test_archive_failure_preserves_primary_diagnostic_if_staging_cleanup_fails(self):
         real_mkdtemp = tempfile.mkdtemp
@@ -680,11 +698,6 @@ class CbzToJxlDiscoveryAndPathSafetyTests(unittest.TestCase):
                 created_staging_dirs.append(path)
                 return str(path)
 
-            archive_error = subprocess.CalledProcessError(
-                15,
-                ["zip", "private-stage.cbz", "."],
-                stderr=b"could not create output file\n",
-            )
             cleanup_error = PermissionError(
                 13, "Permission denied", str(root / "private-stage")
             )
@@ -695,7 +708,7 @@ class CbzToJxlDiscoveryAndPathSafetyTests(unittest.TestCase):
                         "mkdtemp",
                         side_effect=record_mkdtemp,
                     ),
-                    patch("subprocess.run", side_effect=archive_error),
+                    patch.object(cbztojxl, "write_zip_archive", side_effect=cbztojxl.ZipArchiveError("could not create ZIP archive")),
                     patch.object(
                         cbztojxl.shutil,
                         "rmtree",
@@ -703,7 +716,7 @@ class CbzToJxlDiscoveryAndPathSafetyTests(unittest.TestCase):
                     ),
                     self.assertRaisesRegex(
                         cbztojxl.DependencyError,
-                        "^zip exited with status 15: could not create output file; "
+                        "^could not create ZIP archive; "
                         "staging cleanup also failed: Permission denied$",
                     ),
                 ):
@@ -733,8 +746,10 @@ class CbzToJxlDiscoveryAndPathSafetyTests(unittest.TestCase):
                 created_staging_dirs.append(path)
                 return str(path)
 
-            def create_staged_archive_and_swap_leaf(command, **_kwargs):
-                Path(command[3]).write_bytes(b"new-archive")
+            real_write_zip_archive = cbztojxl.write_zip_archive
+
+            def create_staged_archive_and_swap_leaf(staged_path, staged_source_dir):
+                real_write_zip_archive(staged_path, staged_source_dir)
                 output.symlink_to(victim)
 
             cleanup_error = PermissionError(
@@ -747,10 +762,7 @@ class CbzToJxlDiscoveryAndPathSafetyTests(unittest.TestCase):
                         "mkdtemp",
                         side_effect=record_mkdtemp,
                     ),
-                    patch(
-                        "subprocess.run",
-                        side_effect=create_staged_archive_and_swap_leaf,
-                    ),
+                    patch.object(cbztojxl, "write_zip_archive", side_effect=create_staged_archive_and_swap_leaf),
                     patch.object(
                         cbztojxl.shutil,
                         "rmtree",
@@ -949,43 +961,30 @@ class CbzToJxlStageOutputTests(unittest.TestCase):
         self.assert_progress_is_cleared_before_error(stderr, events)
 
     def test_extract_archive_captures_concise_diagnostic(self):
-        error = subprocess.CalledProcessError(
-            9,
-            ["unzip", "/private/archive.cbz", "-d", "/private/output"],
-            stderr=b"corrupt archive\n",
-        )
-        with (
-            tempfile.TemporaryDirectory() as directory,
-            patch("subprocess.run", side_effect=error) as run,
-        ):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = Path(directory) / "volume.cbz"
+            archive.write_bytes(b"not a zip")
             with self.assertRaisesRegex(
                 cbztojxl.DependencyError,
-                "^unzip exited with status 9: corrupt archive$",
+                "^ZIP archive is invalid or uses unsupported features$",
             ):
                 cbztojxl.extract_archive(
-                    Path(directory) / "volume.cbz",
+                    archive,
                     Path(directory) / "extracted",
                     self.format_config,
                 )
-        self.assertIs(run.call_args.kwargs["stderr"], subprocess.PIPE)
 
     def test_create_cbz_captures_concise_diagnostic(self):
-        error = subprocess.CalledProcessError(
-            15,
-            ["zip", "/private/output.cbz", "."],
-            stderr=b"could not create output file\n",
-        )
-        with (
-            tempfile.TemporaryDirectory() as directory,
-            patch("subprocess.run", side_effect=error) as run,
-        ):
+        with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            with self.assertRaisesRegex(
-                cbztojxl.DependencyError,
-                "^zip exited with status 15: could not create output file$",
+            with patch.object(
+                cbztojxl, "write_zip_archive", side_effect=cbztojxl.ZipArchiveError("could not create ZIP archive")
             ):
-                cbztojxl.create_cbz(root / "volume.cbz", root)
-        self.assertIs(run.call_args.kwargs["stderr"], subprocess.PIPE)
+                with self.assertRaisesRegex(
+                    cbztojxl.DependencyError,
+                    "^could not create ZIP archive$",
+                ):
+                    cbztojxl.create_cbz(root / "volume.cbz", root)
 
     def test_conversion_failure_keeps_page_index(self):
         error = subprocess.CalledProcessError(
@@ -998,6 +997,42 @@ class CbzToJxlStageOutputTests(unittest.TestCase):
             with patch("subprocess.run", side_effect=error):
                 failures = cbztojxl.convert_jpegs_to_jxl(extracted)
         self.assertEqual(failures, [(1, page, error)])
+
+    def test_conversion_orders_jpegs_by_relative_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            extracted = Path(directory)
+            (extracted / "chapter").mkdir()
+            (extracted / "z.jpg").write_bytes(b"jpeg")
+            (extracted / "chapter" / "a.jpg").write_bytes(b"jpeg")
+            converted = []
+
+            def convert(command, **_kwargs):
+                converted.append(Path(command[3]).relative_to(extracted).as_posix())
+
+            with patch.object(cbztojxl.subprocess, "run", side_effect=convert):
+                failures = cbztojxl.convert_jpegs_to_jxl(extracted)
+
+        self.assertEqual(failures, [])
+        self.assertEqual(converted, ["chapter/a.jpg", "z.jpg"])
+
+    def test_native_cbz_writer_orders_entries_without_subprocess(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "pages"
+            source.mkdir()
+            (source / "z.jxl").write_bytes(b"z")
+            nested = source / "chapter"
+            nested.mkdir()
+            (nested / "a.jxl").write_bytes(b"a")
+            output = root / "comic.cbz"
+
+            with patch.object(cbztojxl.subprocess, "run", side_effect=AssertionError):
+                cbztojxl.create_cbz(output, source)
+
+            with zipfile.ZipFile(output) as archive:
+                names = archive.namelist()
+
+        self.assertEqual(names, ["chapter/", "chapter/a.jxl", "z.jxl"])
 
     def test_process_archive_reports_each_stage_error_without_command_arguments(self):
         cases = (

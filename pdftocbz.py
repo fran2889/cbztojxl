@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,7 +19,7 @@ EXIT_DEPENDENCY_ERROR = 1
 EXIT_CONVERSION_ERROR = 2
 EXIT_NO_FILES = 3
 
-REQUIRED_TOOLS = ("pdfinfo", "pdftotext", "pdfimages", "pdftocairo", "zip")
+REQUIRED_TOOLS = ("pdfinfo", "pdftotext", "pdfimages", "pdftocairo")
 
 
 def parse_args() -> argparse.Namespace:
@@ -210,8 +211,9 @@ def create_cbz(output_path: Path, pages_dir: Path) -> None:
     temporary = output_path.with_name("." + output_path.name + ".tmp")
     if temporary.exists():
         temporary.unlink()
-    subprocess.run(["zip", "-q", "-X", "-r", str(temporary), "."], cwd=pages_dir, check=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for entry in sorted(pages_dir.rglob("*"), key=lambda path: path.relative_to(pages_dir).as_posix()):
+            archive.write(entry, entry.relative_to(pages_dir).as_posix())
     os.replace(temporary, output_path)
 
 

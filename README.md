@@ -7,13 +7,10 @@ Convert comic archive files (CBZ, CBR, CB7, ZIP, RAR, 7Z) containing JPEG images
 Requires:
 - Python 3.10+
 - [cjxl from libjxl](https://github.com/libjxl/libjxl)
-- zip and unzip utilities (usually pre-installed on Linux/macOS)
 - Optional: unrar/rar (for CBR/RAR support)
 - Optional: p7zip/7z (for CB7/7Z support)
 
 ```bash
-# On Ubuntu/Debian
-sudo apt-get install zip unzip
 # For RAR support:
 sudo apt-get install unrar
 # For 7z support:
@@ -82,6 +79,11 @@ are created beneath the destination tree and removed before success is reported;
 cleanup failures are reported as archive errors. Errors always include their detailed
 diagnostic in both regular and verbose modes.
 
+Archive paths, converted pages, and generated CBZ members are processed in
+case-sensitive lexical order of their relative POSIX paths. ZIP timestamps and
+metadata are preserved from source entries, so generated archives are not
+promised to be byte-for-byte reproducible.
+
 ## Exit Codes
 
 | Code | Meaning |
@@ -95,21 +97,23 @@ diagnostic in both regular and verbose modes.
 
 | Input Extension | Archive Type | Output Format | Tool Required |
 |----------------|--------------|---------------|----------------|
-| .cbz | ZIP | .cbz (ZIP) | zip/unzip (mandatory) |
-| .zip | ZIP | .cbz (ZIP) | zip/unzip (mandatory) |
+| .cbz | ZIP | .cbz (ZIP) | Python standard library |
+| .zip | ZIP | .cbz (ZIP) | Python standard library |
 | .cbr | RAR | .cbz (ZIP) | unrar (optional) |
 | .rar | RAR | .cbz (ZIP) | unrar (optional) |
 | .cb7 | 7z | .cbz (ZIP) | 7z (optional) |
 | .7z | 7z | .cbz (ZIP) | 7z (optional) |
 
-**Note:** If an optional tool (unrar or 7z) is not installed, matching files are
-still discovered and receive an `[skip] ... | archiver not available` result.
+**Note:** ZIP/CBZ input and output use Python's standard-library `zipfile`
+module. Encrypted or unsupported ZIP variants fail with an archive error. If an
+optional tool (unrar or 7z) is not installed, matching files are still discovered
+and receive an `[skip] ... | archiver not available` result.
 
 ## PDF to CBZ conversion
 
 `pdftocbz.py` creates a conventional CBZ with one JPEG per PDF page. It preserves an embedded JPEG unchanged when a page has no extractable text and exactly one JPEG image; every other page is rendered.
 
-Requires Python 3.6+, Poppler utilities (`pdfinfo`, `pdftotext`, `pdfimages`, `pdftocairo`), and `zip`.
+Requires Python 3.6+ and Poppler utilities (`pdfinfo`, `pdftotext`, `pdfimages`, `pdftocairo`).
 
 ```bash
 # Create comic.cbz next to comic.pdf

@@ -2,6 +2,7 @@ import importlib.util
 import io
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -13,6 +14,21 @@ SPEC.loader.exec_module(pdftocbz)
 
 
 class PdfToCbzUnitTests(unittest.TestCase):
+    def test_create_cbz_uses_native_zip_and_orders_members(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pages = root / "pages"
+            pages.mkdir()
+            (pages / "0002.jpg").write_bytes(b"second")
+            (pages / "0001.jpg").write_bytes(b"first")
+            output = root / "comic.cbz"
+
+            with patch.object(pdftocbz.subprocess, "run", side_effect=AssertionError):
+                pdftocbz.create_cbz(output, pages)
+
+            with zipfile.ZipFile(output) as archive:
+                self.assertEqual(archive.namelist(), ["0001.jpg", "0002.jpg"])
+
     def test_build_page_images_counts_lossless_and_rerendered_pages(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

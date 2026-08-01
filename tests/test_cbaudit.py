@@ -1,6 +1,7 @@
 import importlib.util
 import tempfile
 import unittest
+import zipfile
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -110,6 +111,35 @@ class CbAuditReportTests(unittest.TestCase):
 class CbAuditProcessingTests(unittest.TestCase):
     def setUp(self):
         self.format_config = cbaudit.ALL_FORMATS["zip"]
+
+    def test_zip_extraction_uses_native_library_without_subprocess(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            archive = root / "comic.cbz"
+            extracted = root / "extracted"
+            with zipfile.ZipFile(archive, "w") as output:
+                output.writestr("pages/0001.jpg", b"jpeg")
+
+            with patch.object(cbaudit.subprocess, "run", side_effect=AssertionError):
+                cbaudit.extract_archive(archive, extracted, self.format_config)
+
+            self.assertEqual((extracted / "pages" / "0001.jpg").read_bytes(), b"jpeg")
+
+    def test_discovery_orders_archives_by_relative_path(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "z.cbz").touch()
+            nested = root / "series"
+            nested.mkdir()
+            (nested / "a.cbz").touch()
+            (root / "A.cbz").touch()
+            with patch.object(cbaudit, "ARCHIVE_FORMATS", cbaudit.ALL_FORMATS):
+                discovered = cbaudit.find_archive_files(root, recursive=True)
+
+        self.assertEqual(
+            [path.relative_to(root).as_posix() for path in discovered],
+            ["A.cbz", "series/a.cbz", "z.cbz"],
+        )
 
     def run_archive(self, page_count, *, full_scan=False, page_size_threshold=100):
         observed = {}

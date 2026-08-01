@@ -19,6 +19,13 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator, TypedDict
 
+from zip_support import (
+    ZipArchiveError,
+    count_zip_jpegs,
+    extract_zip_archive,
+    write_zip_archive,
+)
+
 # Exit code constants
 EXIT_DEPENDENCY_ERROR = 1
 EXIT_CONVERSION_ERROR = 2
@@ -61,9 +68,9 @@ class ArchiveFormatConfig(TypedDict):
 ALL_FORMATS: dict[str, ArchiveFormatConfig] = {
     'zip': {
         'extensions': ['.cbz', '.zip'],
-        'extract_cmd': ['unzip', '-q', '{archive}', '-d', '{output}'],
-        'list_cmd': ['unzip', '-l', '{archive}'],
-        'requires': ['unzip'],
+        'extract_cmd': [],
+        'list_cmd': [],
+        'requires': [],
     },
     'rar': {
         'extensions': ['.cbr', '.rar'],
@@ -159,12 +166,12 @@ def is_tool_available(tool_name: str) -> bool:
 def check_dependencies() -> None:
     """Verify required tools are available in PATH.
     
-    Mandatory tools (cjxl, zip, unzip) cause script to exit if missing.
+    Mandatory tools (cjxl) cause script to exit if missing.
     Optional tools (unrar, 7z) generate warnings, matching formats excluded from ARCHIVE_FORMATS.
     """
     global ARCHIVE_FORMATS
     
-    MANDATORY_TOOLS = ['cjxl', 'zip', 'unzip']
+    MANDATORY_TOOLS = ['cjxl']
     OPTIONAL_TOOLS = {
         'unrar': ['unrar', 'rar'],
         '7z': ['7z'],
@@ -179,7 +186,6 @@ def check_dependencies() -> None:
     if missing_mandatory:
         print(f"Error: Missing required dependencies: {', '.join(missing_mandatory)}", file=sys.stderr)
         print("Install cjxl from libjxl: https://github.com/libjxl/libjxl", file=sys.stderr)
-        print("Install zip/unzip from your package manager", file=sys.stderr)
         sys.exit(EXIT_DEPENDENCY_ERROR)
     
     # Check optional tools
@@ -211,9 +217,9 @@ def find_archive_files(input_path: Path, recursive: bool) -> list[Path]:
     for fmt in ALL_FORMATS.values():
         supported_extensions.extend(fmt['extensions'])
     
-    # If no formats available (shouldn't happen with mandatory zip), handle gracefully
+    # ZIP support is built in, so at least one archive format is always available.
     if not supported_extensions:
-        print("Error: No archive formats available (zip/unzip required)", file=sys.stderr)
+        print("Error: No archive formats available", file=sys.stderr)
         sys.exit(EXIT_DEPENDENCY_ERROR)
     
     # Single file with supported extension
@@ -229,8 +235,11 @@ def find_archive_files(input_path: Path, recursive: bool) -> list[Path]:
     if input_path.is_dir():
         pattern = "**/*" if recursive else "*"
         all_files = list(input_path.glob(pattern))
-        return [f for f in all_files 
-                if f.is_file() and f.suffix.lower() in supported_extensions]
+        return sorted(
+            (f for f in all_files if f.is_file()
+             and f.suffix.lower() in supported_extensions),
+            key=lambda path: path.relative_to(input_path).as_posix(),
+        )
     
     # Invalid input
     input_display = sanitize_fragment(input_path.name)
@@ -330,6 +339,12 @@ def count_jpegs_in_archive(archive_path: Path, fmt_config: ArchiveFormatConfig) 
     
     Raises DependencyError when the archive cannot be listed.
     """
+    if fmt_config is ALL_FORMATS['zip']:
+        try:
+            return count_zip_jpegs(archive_path, is_jpeg_file)
+        except ZipArchiveError as error:
+            raise DependencyError(str(error)) from error
+
     cmd = [c.format(archive=str(archive_path)) for c in fmt_config['list_cmd']]
     try:
         result = subprocess.run(
@@ -436,6 +451,13 @@ def extract_archive(archive_path: Path, output_dir: Path, fmt_config: ArchiveFor
     Raises:
         DependencyError: If extraction fails.
     """
+    if fmt_config is ALL_FORMATS['zip']:
+        try:
+            extract_zip_archive(archive_path, output_dir)
+        except ZipArchiveError as error:
+            raise DependencyError(str(error)) from error
+        return
+
     # Build command by formatting placeholders
     cmd = [c.format(archive=str(archive_path), output=str(output_dir)) 
            for c in fmt_config['extract_cmd']]
@@ -537,8 +559,10 @@ def convert_jpegs_to_jxl(
     failures = []
     
     # Find all JPEG files recursively, excluding AppleDouble metadata files
-    jpeg_files = [f for f in temp_dir.rglob("*") 
-                  if f.is_file() and is_jpeg_file(f)]
+    jpeg_files = sorted(
+        (f for f in temp_dir.rglob("*") if f.is_file() and is_jpeg_file(f)),
+        key=lambda path: path.relative_to(temp_dir).as_posix(),
+    )
     
     for i, filepath in enumerate(jpeg_files):
         jxl_path = filepath.with_suffix(".jxl")
@@ -587,14 +611,7 @@ def create_cbz(output_path: Path, source_dir: Path) -> None:
         )
         staged_path = staging_dir / "archive.cbz"
         validate_output_path(staged_path, output_path.parent)
-        cmd = ["zip", "-q", "-r", str(staged_path), "."]
-        subprocess.run(
-            cmd,
-            cwd=str(source_dir),
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
+        write_zip_archive(staged_path, source_dir)
         if output_path.is_symlink():
             raise DependencyError(
                 "filesystem error: output path is a symbolic link"
@@ -602,8 +619,8 @@ def create_cbz(output_path: Path, source_dir: Path) -> None:
         os.replace(staged_path, output_path)
     except DependencyError as error:
         failure = error
-    except subprocess.CalledProcessError as error:
-        failure = DependencyError(command_diagnostic("zip", error))
+    except ZipArchiveError as error:
+        failure = DependencyError(str(error))
     except OSError as error:
         failure = DependencyError(filesystem_diagnostic(error))
     finally:
