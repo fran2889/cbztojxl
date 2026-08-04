@@ -16,7 +16,7 @@ environment and are not bundled or redistributed by this project.
 Requires:
 - Python 3.10+
 - [cjxl from libjxl](https://github.com/libjxl/libjxl)
-- Optional: unrar/rar (for CBR/RAR support)
+- Optional: unrar (for CBR/RAR support)
 - Optional: p7zip/7z (for CB7/7Z support)
 
 ```bash

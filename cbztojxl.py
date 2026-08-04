@@ -176,7 +176,7 @@ def check_dependencies() -> None:
     
     MANDATORY_TOOLS = ['cjxl']
     OPTIONAL_TOOLS = {
-        'unrar': ['unrar', 'rar'],
+        'unrar': ['unrar'],
         '7z': ['7z'],
     }
     

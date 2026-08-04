@@ -17,6 +17,30 @@ cbztojxl = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(cbztojxl)
 
 
+class CbzToJxlDependencyTests(unittest.TestCase):
+    def test_rar_formats_require_unrar(self):
+        original_formats = cbztojxl.ARCHIVE_FORMATS
+        self.addCleanup(setattr, cbztojxl, "ARCHIVE_FORMATS", original_formats)
+
+        available = {"cjxl", "7z", "rar"}
+        with (
+            patch.object(cbztojxl, "is_tool_available", side_effect=available.__contains__),
+            patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
+            cbztojxl.check_dependencies()
+
+        self.assertNotIn("rar", cbztojxl.ARCHIVE_FORMATS)
+        self.assertIn("Warning: unrar not found", stderr.getvalue())
+
+        available = {"cjxl", "7z", "unrar"}
+        with patch.object(
+            cbztojxl, "is_tool_available", side_effect=available.__contains__
+        ):
+            cbztojxl.check_dependencies()
+
+        self.assertIn("rar", cbztojxl.ARCHIVE_FORMATS)
+
+
 class RecordingStream(io.StringIO):
     def __init__(self, name, events):
         super().__init__()

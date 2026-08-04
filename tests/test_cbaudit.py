@@ -14,6 +14,30 @@ cbaudit = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(cbaudit)
 
 
+class CbAuditDependencyTests(unittest.TestCase):
+    def test_rar_formats_require_unrar(self):
+        original_formats = cbaudit.ARCHIVE_FORMATS
+        self.addCleanup(setattr, cbaudit, "ARCHIVE_FORMATS", original_formats)
+
+        available = {"identify", "7z", "rar"}
+        with (
+            patch.object(cbaudit, "is_tool_available", side_effect=available.__contains__),
+            patch("sys.stderr", new_callable=StringIO) as stderr,
+        ):
+            cbaudit.check_dependencies()
+
+        self.assertNotIn("rar", cbaudit.ARCHIVE_FORMATS)
+        self.assertIn("Warning: unrar not found", stderr.getvalue())
+
+        available = {"identify", "7z", "unrar"}
+        with patch.object(
+            cbaudit, "is_tool_available", side_effect=available.__contains__
+        ):
+            cbaudit.check_dependencies(skip_errors=True)
+
+        self.assertIn("rar", cbaudit.ARCHIVE_FORMATS)
+
+
 class CbAuditArgumentTests(unittest.TestCase):
     def parse(self, *arguments):
         with patch("sys.argv", ["cbaudit.py", *arguments]):

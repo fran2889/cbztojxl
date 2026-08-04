@@ -157,7 +157,7 @@ def check_dependencies(skip_errors: bool = False):
     
     MANDATORY_TOOLS = ['identify']
     OPTIONAL_TOOLS = {
-        'unrar': ['unrar', 'rar'],
+        'unrar': ['unrar'],
         '7z': ['7z'],
     }
     
