@@ -2,6 +2,15 @@
 
 Convert comic archive files (CBZ, CBR, CB7, ZIP, RAR, 7Z) containing JPEG images to JXL format using lossless compression.
 
+## License
+
+cbztojxl is licensed under the GNU General Public License v3.0 only. See
+[LICENSE](LICENSE) for the full license text.
+
+The repository contains no bundled third-party code or Python runtime
+dependencies. Optional external command-line tools are invoked from the user's
+environment and are not bundled or redistributed by this project.
+
 ## Installation
 
 Requires:

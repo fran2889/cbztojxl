@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Fran
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Convert PDF comic files into conventional CBZ archives."""
 
 import argparse

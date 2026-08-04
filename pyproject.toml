@@ -1,0 +1,7 @@
+[project]
+name = "cbztojxl"
+version = "0.1.0"
+description = "Command-line utilities for converting and auditing comic archives"
+requires-python = ">=3.10"
+license = "GPL-3.0-only"
+authors = [{ name = "Fran" }]

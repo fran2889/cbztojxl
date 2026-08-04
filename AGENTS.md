@@ -3,13 +3,6 @@
 This file is for AI agents. For usage and installation instructions, see
 [README.md](./README.md).
 
-## Purpose and Precedence
-
-This document gives repository-specific guidance for cbztojxl. General working
-instructions adapted from the shared FlixMonkey guidance take precedence over
-local conventions unless they conflict with Python best practice, the task
-request, or established behavior in this repository.
-
 ## Project Overview
 
 cbztojxl is a set of Python command-line utilities for converting and auditing

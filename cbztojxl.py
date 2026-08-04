@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Fran
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Convert CBZ archives containing JPEG images to JXL format.
 
 Requires cjxl v0.11+ for -q 100 (mathematically lossless) conversion.

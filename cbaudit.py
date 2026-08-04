@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 Fran
+# SPDX-License-Identifier: GPL-3.0-only
+
 """Audit comic archives (CBZ, CBR, CB7) for JPEG image quality and corruption using ImageMagick."""
 
 __version__ = "1.0.0"
