@@ -211,9 +211,12 @@ def check_dependencies() -> None:
                        if all(is_tool_available(t) for t in v['requires'])}
 
 
-def find_archive_files(input_path: Path, recursive: bool) -> list[Path]:
+def find_archive_files(
+    input_path: Path, recursive: bool, output_dir: Path | None = None
+) -> list[Path]:
     """Find all supported archive files in input_path (file or directory)."""
     input_path = lexical_absolute(input_path)
+    excluded_output = lexical_absolute(output_dir) if output_dir else None
     
     # Discover every recognized format. Availability is reported per archive.
     supported_extensions = []
@@ -238,9 +241,29 @@ def find_archive_files(input_path: Path, recursive: bool) -> list[Path]:
     if input_path.is_dir():
         pattern = "**/*" if recursive else "*"
         all_files = list(input_path.glob(pattern))
+
+        if recursive and excluded_output is not None:
+            try:
+                output_relative_path = excluded_output.relative_to(input_path)
+            except ValueError:
+                excluded_output = None
+            else:
+                if not output_relative_path.parts:
+                    excluded_output = None
+
+        def is_excluded_output_file(path: Path) -> bool:
+            if not recursive or excluded_output is None:
+                return False
+            try:
+                path.relative_to(excluded_output)
+            except ValueError:
+                return False
+            return True
+
         return sorted(
             (f for f in all_files if f.is_file()
-             and f.suffix.lower() in supported_extensions),
+             and f.suffix.lower() in supported_extensions
+             and not is_excluded_output_file(f)),
             key=lambda path: path.relative_to(input_path).as_posix(),
         )
     
@@ -692,6 +715,27 @@ def compute_output_path(
     return result.with_suffix('.cbz')
 
 
+def find_output_path_collisions(
+    archive_files: list[Path],
+    base_input: Path,
+    output_dir: Path | None,
+    overwrite: bool,
+) -> set[Path]:
+    """Return inputs whose computed output path is shared by another input."""
+    destinations: dict[Path, list[Path]] = {}
+    for archive_file in archive_files:
+        output_path = compute_output_path(
+            archive_file, base_input, output_dir, overwrite
+        )
+        destinations.setdefault(output_path, []).append(archive_file)
+    return {
+        archive_file
+        for matching_inputs in destinations.values()
+        if len(matching_inputs) > 1
+        for archive_file in matching_inputs
+    }
+
+
 def report_processed(
     source_display: str,
     target_display: str,
@@ -1015,7 +1059,7 @@ def main() -> None:
     output_dir = lexical_absolute(args.output_dir) if args.output_dir else None
 
     # Find all archive files to process
-    archive_files = find_archive_files(input_path, args.recursive)
+    archive_files = find_archive_files(input_path, args.recursive, output_dir)
 
     if not archive_files:
         print("No archive files found to process.", file=sys.stderr)
@@ -1023,6 +1067,10 @@ def main() -> None:
 
     if args.verbose:
         print(f"Found {len(archive_files)} archive file(s) to process")
+
+    collisions = find_output_path_collisions(
+        archive_files, input_path, output_dir, args.overwrite
+    )
 
     # Track total sizes for final summary
     total_input_size = 0
@@ -1035,6 +1083,19 @@ def main() -> None:
     show_progress_bar = not args.verbose and not args.dry_run
     
     for i, archive_file in enumerate(archive_files, 1):
+        if archive_file in collisions:
+            output_path = compute_output_path(
+                archive_file, input_path, output_dir, args.overwrite
+            )
+            output_root = output_dir if output_dir else output_path.parent
+            source_display = display_input_path(archive_file, input_path)
+            target_display = display_output_path(output_path, output_root)
+            print(
+                f"[skip]  {source_display} => {target_display} | "
+                "output path collides with another input"
+            )
+            skipped_count += 1
+            continue
         input_size, output_size, status = process_archive(
             input_path=archive_file,
             base_input=input_path,

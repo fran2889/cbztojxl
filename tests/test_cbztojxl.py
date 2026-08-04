@@ -399,6 +399,32 @@ class CbzToJxlDiscoveryAndPathSafetyTests(unittest.TestCase):
             ["A.cbz", "series/a.cbz", "z.cbz"],
         )
 
+    def test_recursive_discovery_excludes_nested_output_tree(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "source.cbz").touch()
+            output = root / "output"
+            output.mkdir()
+            (output / "previous.cbz").touch()
+
+            discovered = cbztojxl.find_archive_files(
+                root, recursive=True, output_dir=output
+            )
+
+        self.assertEqual(discovered, [root / "source.cbz"])
+
+    def test_recursive_discovery_retains_input_when_output_is_same_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.cbz"
+            source.touch()
+
+            discovered = cbztojxl.find_archive_files(
+                root, recursive=True, output_dir=root
+            )
+
+        self.assertEqual(discovered, [source])
+
     def test_zip_listing_uses_native_library_without_subprocess(self):
         with tempfile.TemporaryDirectory() as directory:
             archive = Path(directory) / "comic.cbz"
@@ -1582,6 +1608,47 @@ class CbzToJxlStageOutputTests(unittest.TestCase):
 
 
 class CbzToJxlMainOutputTests(unittest.TestCase):
+    def test_main_skips_every_output_path_collision_before_processing(self):
+        first = Path("library/book.cbz")
+        second = Path("library/book.cbr")
+        distinct = Path("library/other.cbz")
+        args = Namespace(
+            input=Path("library"), output_dir=Path("out"), recursive=True,
+            overwrite=True, verbose=False, dry_run=False,
+        )
+        with (
+            patch.object(cbztojxl, "parse_args", return_value=args),
+            patch.object(cbztojxl, "check_dependencies"),
+            patch.object(
+                cbztojxl,
+                "find_archive_files",
+                return_value=[first, second, distinct],
+            ),
+            patch.object(
+                cbztojxl, "process_archive", return_value=(10, 5, "processed")
+            ) as process,
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+            self.assertRaises(SystemExit) as raised,
+        ):
+            cbztojxl.main()
+
+        self.assertEqual(raised.exception.code, 0)
+        self.assertEqual(process.call_args_list[0].kwargs["input_path"], distinct)
+        self.assertEqual(process.call_count, 1)
+        self.assertIn(
+            "[skip]  book.cbz => book.cbz | output path collides with another input",
+            stdout.getvalue(),
+        )
+        self.assertIn(
+            "[skip]  book.cbr => book.cbz | output path collides with another input",
+            stdout.getvalue(),
+        )
+        self.assertIn(
+            "[total] 3 archives | 1 done, 2 skipped, 0 failed | "
+            "10 B => 5 B (50.0% smaller)",
+            stdout.getvalue(),
+        )
+
     def test_total_and_failure_exit_are_mode_independent(self):
         archive_files = [Path(f"comic-{index}.cbz") for index in range(4)]
         results = [

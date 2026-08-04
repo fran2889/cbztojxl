@@ -71,6 +71,7 @@ python cbztojxl.py /comics/ /backup/ -r --dry-run
 - **No output directory specified:** Creates files next to source with `_jxl` suffix (e.g., `comic.cbz` → `comic_jxl.cbz`)
 - **Output directory specified:** Creates files in output directory without suffix, preserving relative directory structure
 - **Output directory = source directory + `--overwrite`:** Replaces original files in place
+- **Output-path collisions:** If multiple inputs map to the same output CBZ path, every input in that collision group is skipped before processing.
 
 Every nonempty run prints a standard result line for each discovered archive,
 followed by a total line with archive counts and the combined size reduction for
