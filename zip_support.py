@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import stat
+import time
 import zipfile
 from pathlib import Path, PurePosixPath
 
@@ -48,6 +50,12 @@ def _validated_member_path(info: zipfile.ZipInfo, output_dir: Path) -> Path:
     return destination
 
 
+def _restore_member_mtime(path: Path, info: zipfile.ZipInfo) -> None:
+    """Restore a ZIP member's modification time on an extracted path."""
+    timestamp = time.mktime((*info.date_time, 0, 0, -1))
+    os.utime(path, (timestamp, timestamp))
+
+
 def extract_zip_archive(archive_path: Path, output_dir: Path) -> None:
     """Safely extract a ZIP archive without invoking external utilities."""
     try:
@@ -57,13 +65,22 @@ def extract_zip_archive(archive_path: Path, output_dir: Path) -> None:
                 (member, _validated_member_path(member, output_dir))
                 for member in members
             ]
+            directory_members = []
             for member, destination in destinations:
                 if member.is_dir():
                     destination.mkdir(parents=True, exist_ok=True)
+                    directory_members.append((member, destination))
                     continue
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 with archive.open(member) as source, destination.open("wb") as target:
                     shutil.copyfileobj(source, target)
+                _restore_member_mtime(destination, member)
+            for member, destination in sorted(
+                directory_members,
+                key=lambda item: len(item[1].parts),
+                reverse=True,
+            ):
+                _restore_member_mtime(destination, member)
     except ZipArchiveError:
         raise
     except (OSError, RuntimeError, NotImplementedError, zipfile.BadZipFile) as error:

@@ -90,9 +90,10 @@ cleanup failures are reported as archive errors. Errors always include their det
 diagnostic in both regular and verbose modes.
 
 Archive paths, converted pages, and generated CBZ members are processed in
-case-sensitive lexical order of their relative POSIX paths. ZIP timestamps and
-metadata are preserved from source entries, so generated archives are not
-promised to be byte-for-byte reproducible.
+case-sensitive lexical order of their relative POSIX paths. ZIP and CBZ input
+member timestamps are preserved for unchanged output members. Converted JPEG
+pages are newly created JXL files. Other ZIP metadata is normalized, so
+generated archives are not promised to be byte-for-byte reproducible.
 
 ## Exit Codes
 

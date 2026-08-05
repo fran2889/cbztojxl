@@ -1024,6 +1024,23 @@ class CbzToJxlStageOutputTests(unittest.TestCase):
                     self.format_config,
                 )
 
+    def test_zip_extraction_preserves_unchanged_member_timestamp(self):
+        timestamp = (2001, 2, 4, 6, 8, 10)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.cbz"
+            extracted = root / "extracted"
+            output = root / "output.cbz"
+            info = zipfile.ZipInfo("notes.txt", date_time=timestamp)
+            with zipfile.ZipFile(source, "w") as archive:
+                archive.writestr(info, b"unchanged")
+
+            cbztojxl.extract_archive(source, extracted, self.format_config)
+            cbztojxl.create_cbz(output, extracted)
+
+            with zipfile.ZipFile(output) as archive:
+                self.assertEqual(archive.getinfo("notes.txt").date_time, timestamp)
+
     def test_create_cbz_captures_concise_diagnostic(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
