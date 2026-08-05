@@ -1065,6 +1065,9 @@ def main() -> None:
         print("No archive files found to process.", file=sys.stderr)
         sys.exit(EXIT_NO_FILES)
 
+    if args.dry_run:
+        print("[dry-run] Planning only. No files will be modified.")
+
     if args.verbose:
         print(f"Found {len(archive_files)} archive file(s) to process")
 
@@ -1122,6 +1125,8 @@ def main() -> None:
     print(
         f"\n{format_total(len(archive_files), successful_count, skipped_count, failed_count, total_input_size, total_output_size)}"
     )
+    if args.dry_run:
+        print("[dry-run] Complete. No files were modified.")
 
     if failed_count:
         sys.exit(EXIT_CONVERSION_ERROR)

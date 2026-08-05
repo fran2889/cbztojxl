@@ -1649,6 +1649,48 @@ class CbzToJxlStageOutputTests(unittest.TestCase):
 
 
 class CbzToJxlMainOutputTests(unittest.TestCase):
+    def test_dry_run_wraps_standard_output_in_notices(self):
+        archive = Path("comic.cbz")
+        args = Namespace(
+            input=archive,
+            output_dir=None,
+            recursive=False,
+            overwrite=False,
+            verbose=False,
+            dry_run=True,
+        )
+        result_line = (
+            "[done]  comic.cbz => comic_jxl.cbz | 1 page | "
+            "100 B => 75 B (25.0% smaller)"
+        )
+        total_line = (
+            "[total] 1 archives | 1 done, 0 skipped, 0 failed | "
+            "100 B => 75 B (25.0% smaller)"
+        )
+
+        def process(**_kwargs):
+            print(result_line)
+            return 100, 75, "processed"
+
+        with (
+            patch.object(cbztojxl, "parse_args", return_value=args),
+            patch.object(cbztojxl, "check_dependencies"),
+            patch.object(cbztojxl, "find_archive_files", return_value=[archive]),
+            patch.object(cbztojxl, "process_archive", side_effect=process),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+            self.assertRaises(SystemExit) as raised,
+        ):
+            cbztojxl.main()
+
+        self.assertEqual(raised.exception.code, 0)
+        self.assertEqual(
+            stdout.getvalue(),
+            "[dry-run] Planning only. No files will be modified.\n"
+            + result_line
+            + f"\n\n{total_line}\n"
+            + "[dry-run] Complete. No files were modified.\n",
+        )
+
     def test_main_skips_every_output_path_collision_before_processing(self):
         first = Path("library/book.cbz")
         second = Path("library/book.cbr")
