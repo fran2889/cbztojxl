@@ -515,6 +515,80 @@ class CbzToJxlDiscoveryAndPathSafetyTests(unittest.TestCase):
             "[total] 1 archives | 0 done, 1 skipped, 0 failed\n",
         )
 
+    def test_parse_args_rejects_replace_source_with_output_directory(self):
+        with patch("sys.argv", ["cbztojxl.py", "book.cbr", "out", "--replace-source"]):
+            with self.assertRaises(SystemExit) as raised:
+                cbztojxl.parse_args()
+
+        self.assertEqual(raised.exception.code, 2)
+
+    def test_replace_source_uses_unsuffixed_sibling_cbz_path(self):
+        source = Path("/library/Issue.cbr")
+
+        output = cbztojxl.compute_output_path(
+            source, source, None, overwrite=False, replace_source=True
+        )
+
+        self.assertEqual(output, Path("/library/Issue.cbz"))
+
+    def test_replace_source_preserves_uppercase_cbz_path(self):
+        output = cbztojxl.compute_output_path(
+            Path("/library/Volume.CBZ"),
+            Path("/library/Volume.CBZ"),
+            None,
+            overwrite=False,
+            replace_source=True,
+        )
+
+        self.assertEqual(output, Path("/library/Volume.CBZ"))
+
+    def test_replace_source_paths_collide_for_cbz_and_cbr_with_same_stem(self):
+        first = Path("/library/Issue.cbz")
+        second = Path("/library/Issue.cbr")
+
+        collisions = cbztojxl.find_output_path_collisions(
+            [first, second], Path("/library"), None,
+            overwrite=False, replace_source=True,
+        )
+
+        self.assertEqual(collisions, {first, second})
+
+    def test_replace_source_paths_collide_when_destinations_differ_only_by_case(self):
+        first = Path("/library/Volume.CBZ")
+        second = Path("/library/Volume.cbr")
+
+        collisions = cbztojxl.find_output_path_collisions(
+            [first, second], Path("/library"), None,
+            overwrite=False, replace_source=True,
+        )
+
+        self.assertEqual(collisions, {first, second})
+
+    def test_main_skips_replace_source_output_collision_before_processing(self):
+        args = Namespace(
+            input=Path("library"), output_dir=None, recursive=True,
+            overwrite=False, verbose=False, dry_run=False, replace_source=True,
+        )
+        with (
+            patch.object(cbztojxl, "parse_args", return_value=args),
+            patch.object(cbztojxl, "check_dependencies"),
+            patch.object(
+                cbztojxl,
+                "find_archive_files",
+                return_value=[Path("library/book.cbz"), Path("library/book.cbr")],
+            ),
+            patch.object(cbztojxl, "process_archive") as process,
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+            self.assertRaises(SystemExit),
+        ):
+            cbztojxl.main()
+
+        self.assertEqual(process.call_count, 0)
+        self.assertIn(
+            "[skip]  book.cbr => book.cbz | output path collides with another input",
+            stdout.getvalue(),
+        )
+
     def test_symlink_aliases_keep_lexical_names_and_distinct_output_paths(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -894,6 +968,148 @@ class CbzToJxlStageOutputTests(unittest.TestCase):
                 total_files=1,
             )
         return result, stdout.getvalue()
+
+    def make_replace_source_archive(self, root, name):
+        source = root / name
+        source.write_bytes(b"archive-data")
+        return source
+
+    def run_replace_source(self, source, *, create_error=None, dry_run=False):
+        def create(output_path, _source_dir):
+            output_path.write_bytes(b"new-cbz")
+
+        with (
+            patch.object(cbztojxl, "get_format_config", return_value=self.format_config),
+            patch.object(cbztojxl, "count_jpegs_in_archive", return_value=1),
+            patch.object(cbztojxl, "extract_archive", side_effect=self.extract_page),
+            patch.object(cbztojxl, "convert_jpegs_to_jxl", return_value=[]),
+            patch.object(
+                cbztojxl,
+                "create_cbz",
+                side_effect=create_error if create_error else create,
+            ),
+            patch("sys.stdout", new_callable=io.StringIO),
+        ):
+            return cbztojxl.process_archive(
+                source,
+                source,
+                None,
+                overwrite=False,
+                verbose=False,
+                dry_run=dry_run,
+                replace_source=True,
+            )
+
+    def test_replace_source_deletes_non_cbz_after_output_is_created(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = self.make_replace_source_archive(Path(directory), "volume.cbr")
+
+            result = self.run_replace_source(source)
+
+            self.assertEqual(result[2], "processed")
+            self.assertFalse(source.exists())
+            self.assertTrue(source.with_suffix(".cbz").exists())
+
+    def test_replace_source_keeps_non_cbz_when_creation_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = self.make_replace_source_archive(Path(directory), "volume.cbr")
+
+            result = self.run_replace_source(
+                source, create_error=cbztojxl.DependencyError("create failed")
+            )
+
+            self.assertEqual(result[2], "error_create")
+            self.assertTrue(source.exists())
+
+    def test_replace_source_keeps_source_when_deletion_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = self.make_replace_source_archive(Path(directory), "volume.cbr")
+
+            with patch.object(
+                Path,
+                "unlink",
+                side_effect=PermissionError(13, "Permission denied"),
+            ):
+                result = self.run_replace_source(source)
+
+            self.assertEqual(result[2], "error_remove_source")
+            self.assertTrue(source.exists())
+            self.assertTrue(source.with_suffix(".cbz").exists())
+
+    def test_replace_source_deletion_failure_reports_output_and_source_retained(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = self.make_replace_source_archive(Path(directory), "volume.cbr")
+
+            with (
+                patch.object(
+                    Path,
+                    "unlink",
+                    side_effect=PermissionError(13, "Permission denied"),
+                ),
+                patch("sys.stdout", new_callable=io.StringIO),
+                patch("sys.stderr", new_callable=io.StringIO) as stderr,
+                patch.object(
+                    cbztojxl,
+                    "get_format_config",
+                    return_value=self.format_config,
+                ),
+                patch.object(
+                    cbztojxl,
+                    "count_jpegs_in_archive",
+                    return_value=1,
+                ),
+                patch.object(
+                    cbztojxl,
+                    "extract_archive",
+                    side_effect=self.extract_page,
+                ),
+                patch.object(cbztojxl, "convert_jpegs_to_jxl", return_value=[]),
+                patch.object(
+                    cbztojxl,
+                    "create_cbz",
+                    side_effect=lambda output_path, _source_dir: output_path.write_bytes(
+                        b"new-cbz"
+                    ),
+                ),
+            ):
+                result = cbztojxl.process_archive(
+                    source,
+                    source,
+                    None,
+                    overwrite=False,
+                    verbose=False,
+                    dry_run=False,
+                    replace_source=True,
+                )
+
+            diagnostic = stderr.getvalue()
+            self.assertEqual(result[2], "error_remove_source")
+            self.assertTrue(source.exists())
+            self.assertTrue(source.with_suffix(".cbz").exists())
+            self.assertIn("converted output was kept", diagnostic)
+            self.assertIn("source was retained", diagnostic)
+            self.assertNotIn(str(source.parent), diagnostic)
+
+    def test_replace_source_dry_run_does_not_write_or_delete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = self.make_replace_source_archive(Path(directory), "volume.cbr")
+
+            result = self.run_replace_source(source, dry_run=True)
+
+            self.assertEqual(result[2], "processed")
+            self.assertTrue(source.exists())
+            self.assertFalse(source.with_suffix(".cbz").exists())
+
+    def test_replace_source_implies_overwrite_for_existing_destination(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = self.make_replace_source_archive(Path(directory), "volume.cbr")
+            source.with_suffix(".cbz").write_bytes(b"existing-cbz")
+
+            result = self.run_replace_source(source)
+
+            self.assertEqual(result[2], "processed")
+            self.assertFalse(source.exists())
+            self.assertEqual(source.with_suffix(".cbz").read_bytes(), b"new-cbz")
 
     def test_process_archive_verbose_is_additive(self):
         with tempfile.TemporaryDirectory() as normal_directory:

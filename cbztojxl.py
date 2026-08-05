@@ -145,11 +145,20 @@ def parse_args() -> argparse.Namespace:
         help="Show what would happen without making changes",
     )
     parser.add_argument(
+        "--replace-source",
+        action="store_true",
+        default=False,
+        help="Replace each source archive after successful conversion",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.replace_source and args.output_dir is not None:
+        parser.error("--replace-source cannot be used with output_dir")
+    return args
 
 
 def is_tool_available(tool_name: str) -> bool:
@@ -675,6 +684,7 @@ def compute_output_path(
     base_input: Path,
     output_dir: Path | None,
     overwrite: bool,
+    replace_source: bool = False,
 ) -> Path:
     """Compute the output path for a converted archive file.
     
@@ -682,6 +692,11 @@ def compute_output_path(
     """
     input_path = lexical_absolute(input_path)
     base_input = lexical_absolute(base_input)
+
+    if replace_source:
+        if input_path.suffix.lower() == ".cbz":
+            return input_path
+        return input_path.with_suffix('.cbz')
     
     if output_dir is None:
         # Default: add _jxl suffix next to source, with .cbz extension
@@ -720,14 +735,18 @@ def find_output_path_collisions(
     base_input: Path,
     output_dir: Path | None,
     overwrite: bool,
+    replace_source: bool = False,
 ) -> set[Path]:
     """Return inputs whose computed output path is shared by another input."""
-    destinations: dict[Path, list[Path]] = {}
+    destinations: dict[Path | str, list[Path]] = {}
     for archive_file in archive_files:
         output_path = compute_output_path(
-            archive_file, base_input, output_dir, overwrite
+            archive_file, base_input, output_dir, overwrite, replace_source
         )
-        destinations.setdefault(output_path, []).append(archive_file)
+        destination_key: Path | str = output_path
+        if replace_source:
+            destination_key = str(output_path).casefold()
+        destinations.setdefault(destination_key, []).append(archive_file)
     return {
         archive_file
         for matching_inputs in destinations.values()
@@ -779,6 +798,7 @@ def process_archive(
     file_index: int = None,
     total_files: int = None,
     show_progress_bar: bool = False,
+    replace_source: bool = False,
 ) -> tuple[int, int, str]:
     """Process a single archive file: extract, convert JPEGs to JXL, repack as CBZ.
     
@@ -793,9 +813,11 @@ def process_archive(
         - 'error_convert' - JXL conversion failed
         - 'error_create' - CBZ creation failed
         - 'error_cleanup' - temporary workspace cleanup failed
+        - 'error_remove_source' - completed output could not replace source
     """
     input_path = lexical_absolute(input_path)
     source_display = display_input_path(input_path, base_input)
+    effective_overwrite = overwrite or replace_source
     try:
         input_size = input_path.stat().st_size
     except OSError as error:
@@ -807,7 +829,11 @@ def process_archive(
 
     try:
         output_path = compute_output_path(
-            input_path, base_input, output_dir, overwrite
+            input_path,
+            base_input,
+            output_dir,
+            effective_overwrite,
+            replace_source,
         )
         output_root = lexical_absolute(output_dir) if output_dir else output_path.parent
         target_display = display_output_path(output_path, output_root)
@@ -853,7 +879,7 @@ def process_archive(
         )
         return input_size, 0, "error_create"
 
-    if output_exists and not overwrite:
+    if output_exists and not effective_overwrite:
         print(
             f"[skip]  {source_display} => {target_display} | "
             "output already exists"
@@ -1011,6 +1037,17 @@ def process_archive(
         )
         return input_size, 0, "error_create"
 
+    if replace_source and input_path.suffix.lower() != ".cbz":
+        try:
+            input_path.unlink()
+        except OSError as error:
+            report_error(
+                f"{source_display} => {target_display} | remove source failed",
+                f"{filesystem_diagnostic(error)}; converted output was kept; "
+                "source was retained",
+            )
+            return input_size, output_size, "error_remove_source"
+
     report_processed(
         source_display,
         target_display,
@@ -1055,6 +1092,8 @@ def main() -> None:
     args = parse_args()
     check_dependencies()
 
+    replace_source = getattr(args, "replace_source", False)
+
     input_path = lexical_absolute(args.input)
     output_dir = lexical_absolute(args.output_dir) if args.output_dir else None
 
@@ -1071,8 +1110,13 @@ def main() -> None:
     if args.verbose:
         print(f"Found {len(archive_files)} archive file(s) to process")
 
+    effective_overwrite = args.overwrite or replace_source
     collisions = find_output_path_collisions(
-        archive_files, input_path, output_dir, args.overwrite
+        archive_files,
+        input_path,
+        output_dir,
+        effective_overwrite,
+        replace_source,
     )
 
     # Track total sizes for final summary
@@ -1088,7 +1132,8 @@ def main() -> None:
     for i, archive_file in enumerate(archive_files, 1):
         if archive_file in collisions:
             output_path = compute_output_path(
-                archive_file, input_path, output_dir, args.overwrite
+                archive_file, input_path, output_dir, effective_overwrite,
+                replace_source,
             )
             output_root = output_dir if output_dir else output_path.parent
             source_display = display_input_path(archive_file, input_path)
@@ -1103,12 +1148,13 @@ def main() -> None:
             input_path=archive_file,
             base_input=input_path,
             output_dir=output_dir,
-            overwrite=args.overwrite,
+            overwrite=effective_overwrite,
             verbose=args.verbose,
             dry_run=args.dry_run,
             file_index=i,
             total_files=len(archive_files),
             show_progress_bar=show_progress_bar,
+            replace_source=replace_source,
         )
         # Accumulate sizes for total summary
         if status == "processed":

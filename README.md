@@ -46,8 +46,8 @@ python cbztojxl.py /path/to/comics/ -r
 # Output to different directory - mirror structure, no suffix
 python cbztojxl.py /path/to/comics/ /backup/ -r
 
-# In-place conversion - replace original files
-python cbztojxl.py /comics/ /comics/ -r -o
+# Replace source archives after successful conversion
+python cbztojxl.py /comics/ -r --replace-source
 
 # Verbose mode
 python cbztojxl.py comic.cbz -v
@@ -64,13 +64,17 @@ python cbztojxl.py /comics/ /backup/ -r --dry-run
 | `-o, --overwrite` | Overwrite existing output files |
 | `-v, --verbose` | Print detailed logging |
 | `--dry-run` | Show what would happen without making changes |
+| `--replace-source` | Replace each source archive after a successful conversion; cannot be used with an output directory, and implies `--overwrite` |
 | `-h, --help` | Show help message |
 
 ## Output Behavior
 
-- **No output directory specified:** Creates files next to source with `_jxl` suffix (e.g., `comic.cbz` → `comic_jxl.cbz`)
+- **No output directory specified:** Creates files next to source with `_jxl` suffix (for example, `comic.cbz` to `comic_jxl.cbz`)
+- **`--replace-source`:** Creates an unsuffixed sibling CBZ, then removes a non-CBZ source only after successful conversion. It cannot be combined with an output directory and implies `--overwrite`.
 - **Output directory specified:** Creates files in output directory without suffix, preserving relative directory structure
-- **Output directory = source directory + `--overwrite`:** Replaces original files in place
+- **Output directory = source directory + `--overwrite`:** Writes output files in
+  the source directory. Same-path replacement applies to CBZ inputs; non-CBZ
+  sources remain unless `--replace-source` is used.
 - **Output-path collisions:** If multiple inputs map to the same output CBZ path, every input in that collision group is skipped before processing.
 
 Every nonempty run prints a standard result line for each discovered archive,
