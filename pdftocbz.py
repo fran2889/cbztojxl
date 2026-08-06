@@ -34,9 +34,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-o", "--overwrite", action="store_true")
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--replace-source",
+        action="store_true",
+        help="Replace each source PDF after successful conversion",
+    )
     parser.add_argument("--fallback-dpi", type=int, default=300)
     parser.add_argument("--version", action="version", version="%(prog)s " + __version__)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.replace_source and args.output_dir is not None:
+        parser.error("--replace-source cannot be used with output_dir")
+    return args
 
 
 def check_dependencies() -> None:
@@ -49,7 +57,7 @@ def check_dependencies() -> None:
 
 def find_pdf_files(input_path: Path, recursive: bool) -> list[Path]:
     """Find PDF files at input_path, optionally including subdirectories."""
-    input_path = input_path.resolve()
+    input_path = input_path.absolute()
     if input_path.is_file():
         if input_path.suffix.lower() == ".pdf":
             return [input_path]
@@ -107,9 +115,14 @@ def parse_pdfimages_list(output: str) -> list[EmbeddedImage]:
 
 
 def compute_output_path(
-    input_path: Path, base_input: Path, output_dir: Path | None
+    input_path: Path,
+    base_input: Path,
+    output_dir: Path | None,
+    replace_source: bool = False,
 ) -> Path:
     """Return the conventional CBZ output path for an input PDF."""
+    if replace_source:
+        return input_path.absolute().with_suffix(".cbz")
     input_path = input_path.resolve()
     if output_dir is None:
         return input_path.with_suffix(".cbz")
@@ -118,6 +131,30 @@ def compute_output_path(
     except ValueError:
         relative_path = Path(input_path.name)
     return (output_dir.resolve() / relative_path).with_suffix(".cbz")
+
+
+def find_output_path_collisions(
+    pdf_files: list[Path],
+    base_input: Path,
+    output_dir: Path | None,
+    replace_source: bool = False,
+) -> set[Path]:
+    """Return inputs whose computed output path is shared by another input."""
+    destinations: dict[Path | str, list[Path]] = {}
+    for pdf_file in pdf_files:
+        output_path = compute_output_path(
+            pdf_file, base_input, output_dir, replace_source
+        )
+        destination_key: Path | str = output_path
+        if replace_source:
+            destination_key = str(output_path).casefold()
+        destinations.setdefault(destination_key, []).append(pdf_file)
+    return {
+        pdf_file
+        for matching_inputs in destinations.values()
+        if len(matching_inputs) > 1
+        for pdf_file in matching_inputs
+    }
 
 
 def run_command(command: list[str]) -> subprocess.CompletedProcess:
@@ -221,9 +258,13 @@ def create_cbz(output_path: Path, pages_dir: Path) -> None:
 
 
 def process_pdf(input_path: Path, base_input: Path, output_dir: Path | None, overwrite: bool,
-                verbose: bool, dry_run: bool, fallback_dpi: int) -> str:
-    output_path = compute_output_path(input_path, base_input, output_dir)
-    if output_path.exists() and not overwrite:
+                verbose: bool, dry_run: bool, fallback_dpi: int,
+                replace_source: bool = False) -> str:
+    output_path = compute_output_path(
+        input_path, base_input, output_dir, replace_source
+    )
+    effective_overwrite = overwrite or replace_source
+    if output_path.exists() and not effective_overwrite:
         print(f"Skipping: {input_path} (output exists: {output_path})")
         return "skipped_exists"
     if dry_run:
@@ -233,6 +274,16 @@ def process_pdf(input_path: Path, base_input: Path, output_dir: Path | None, ove
         with temp_dir(input_path) as work_dir:
             result = build_page_images(input_path, work_dir, fallback_dpi, verbose)
             create_cbz(output_path, work_dir / "pages")
+        if replace_source:
+            try:
+                input_path.unlink()
+            except OSError as error:
+                print(
+                    f"Error: {input_path}: remove source failed: {error}; "
+                    "converted output was kept; source was retained",
+                    file=sys.stderr,
+                )
+                return "error_remove_source"
         print(
             f"Created: {output_path} ({result.total} pages: "
             f"{result.lossless} lossless, {result.rerendered} re-rendered)"
@@ -258,8 +309,32 @@ def main() -> int:
         print("No PDF files found.", file=sys.stderr)
         return EXIT_NO_FILES
     base_input = args.input if args.input.is_dir() else args.input.parent
-    failed = any(process_pdf(pdf, base_input, args.output_dir, args.overwrite, args.verbose,
-                             args.dry_run, args.fallback_dpi) == "error" for pdf in pdf_files)
+    replace_source = getattr(args, "replace_source", False)
+    effective_overwrite = args.overwrite or replace_source
+    collisions = (
+        find_output_path_collisions(
+            pdf_files, base_input, args.output_dir, replace_source
+        )
+        if replace_source
+        else set()
+    )
+    failed = False
+    for pdf in pdf_files:
+        if pdf in collisions:
+            print(f"Skipping: {pdf} (output path collides with another input)")
+            continue
+        status = process_pdf(
+            pdf,
+            base_input,
+            args.output_dir,
+            effective_overwrite,
+            args.verbose,
+            args.dry_run,
+            args.fallback_dpi,
+            replace_source,
+        )
+        if status in {"error", "error_remove_source"}:
+            failed = True
     return EXIT_CONVERSION_ERROR if failed else 0
 
 

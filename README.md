@@ -142,6 +142,9 @@ python3 pdftocbz.py comic.pdf --fallback-dpi 400 -v
 
 # Inspect planned outputs without writing files
 python3 pdftocbz.py /path/to/pdfs/ --dry-run
+
+# Replace each source PDF after a successful conversion
+python3 pdftocbz.py /path/to/pdfs/ -r --replace-source
 ```
 
 Each completed comic reports the number of unchanged embedded JPEGs extracted losslessly and the number of pages that were re-rendered:
@@ -149,6 +152,11 @@ Each completed comic reports the number of unchanged embedded JPEGs extracted lo
 ```text
 Created: comic.cbz (12 pages: 9 lossless, 3 re-rendered)
 ```
+
+`--replace-source` creates or overwrites the sibling CBZ, then removes the
+source PDF only after the CBZ is created successfully. It cannot be combined
+with an output directory, implies `--overwrite`, and does not modify files in
+`--dry-run` mode.
 
 ## Comic archive auditing
 
